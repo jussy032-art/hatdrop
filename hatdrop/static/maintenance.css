@@ -1,0 +1,46 @@
+/* Maintenance screen: copper gears turning, a wrench at work, a "fixing" bar, countdown + "check now".
+   Solid dim instead of backdrop blur (blur is slow on weak phones). Halloween uses the sprite plaque. */
+
+#mtScreen.mt-screen {
+  position:fixed; inset:0; z-index:99999; display:flex; align-items:center; justify-content:center; padding:20px;
+  background:radial-gradient(ellipse at 50% 40%, #1a1030e6, #07040ff2 70%) !important; backdrop-filter:none !important; -webkit-backdrop-filter:none !important;
+}
+#mtScreen.mt-screen[hidden] { display:none !important; }
+#mtScreen .mt-card {
+  width:min(340px, 100%); box-sizing:border-box; display:flex; flex-direction:column; align-items:center; gap:10px;
+  padding:16px 18px 18px !important; text-align:center; color:#ffe8c2 !important;
+  background:linear-gradient(#2c1a10, #1a0f08) !important;
+  border:3px solid #a64f1c !important; border-radius:10px !important;
+  box-shadow:inset 0 0 0 2px #1a0d07, inset 0 2px 0 4px #f3ad6633, 0 6px 0 #000a, 0 0 40px #ff8a2a33 !important;
+}
+html[data-halloween="on"] #mtScreen .mt-card {
+  border:12px solid transparent !important; border-image:url("/static/halloween/ui/plate-brown.svg") 5 fill / 12px stretch !important;
+  border-radius:0 !important; background:none !important; box-shadow:0 6px 0 #000a, 0 0 40px #ff8a2a33 !important;
+}
+#mtScreen .mt-art { width:min(200px, 60vw); height:auto; overflow:visible; }
+#mtScreen .mt-gear { transform-box:fill-box; transform-origin:center; }
+#mtScreen .mt-gear-big { animation:mtSpin 6s linear infinite; }
+#mtScreen .mt-gear-small { animation:mtSpin 4s linear infinite reverse; }
+#mtScreen .mt-wrench { transform-box:view-box; transform-origin:104px 46px; animation:mtWrench 1.6s ease-in-out infinite; }
+#mtScreen h2 { margin:2px 0 0; font-size:16px; line-height:1.35; color:#ffb347 !important; text-shadow:0 2px 0 #000; }
+#mtScreen p { margin:0; font-size:11px; line-height:1.7; color:#e9dfc8; }
+#mtScreen .mt-bar {
+  width:100%; height:12px; margin-top:4px; overflow:hidden; border:2px solid #1a0d07; border-radius:3px;
+  background:#120a08; box-shadow:0 0 0 1px #a64f1c, inset 0 2px 0 #000a;
+}
+#mtScreen .mt-bar i {
+  display:block; height:100%; width:45%;
+  background:repeating-linear-gradient(135deg, #ffb347 0 6px, #e0701e 6px 12px);
+  box-shadow:inset 0 2px 0 #ffe0a0; animation:mtBar 1.6s ease-in-out infinite;
+}
+#mtScreen small { font-size:9px; color:#cfc2a8; opacity:.9; }
+#mtScreen .mt-retry { width:100%; margin-top:2px; }
+
+/* non-Halloween themes: cooler panel, gold title */
+html:not([data-halloween="on"]) #mtScreen .mt-card { background:linear-gradient(#1f3346, #142333) !important; border-color:#5fbf59 !important; }
+html:not([data-halloween="on"]) #mtScreen h2 { color:#ffe08a !important; }
+
+@keyframes mtSpin { to { transform:rotate(360deg) } }
+@keyframes mtWrench { 0%,100% { transform:rotate(0) } 50% { transform:rotate(-22deg) } }
+@keyframes mtBar { 0% { transform:translateX(-110%) } 100% { transform:translateX(230%) } }
+@media (prefers-reduced-motion:reduce) { #mtScreen * { animation:none !important } }

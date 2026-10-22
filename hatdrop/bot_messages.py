@@ -1,0 +1,193 @@
+
+import re
+from html import escape
+from copy import deepcopy
+from urllib.parse import urlsplit, urlunsplit, parse_qsl, urlencode
+
+PLAY = {'text': '🎮 Играть', 'action': 'app', 'target': 'menu', 'style': 'primary'}
+DEFAULT_MESSAGES = {
+    'gift_deposit_received': {'label':'NFT-подарок: зачисление на баланс','text':'{gift_emoji} Ваш подарок {gift_link} успешно доставлен и обменян на {ton_emoji} <b>{value} GRAM</b>.\n\nОн уже у вас на балансе.','buttons':[{'text':'Открыть приложение','action':'app','target':'menu','style':'primary'}]},
+    'deposit_stars_received': {'label':'Пополнение Stars: баланс и срок блокировки','text':'⭐ Пополнение <b>{value} GRAM</b> зачислено.\n{bonus}\nВаш баланс: <b>{balance} GRAM</b>.\nВывод подарков будет доступен с {date}.','buttons':[{'text':'Открыть профиль','action':'app','target':'profile','style':'success'}]},
+    'deposit_received': {'label':'Пополнение: баланс обновлён','text':'💎 <b>Баланс обновлён</b>\n{mode}: <b>+{value} GRAM</b>.\n{bonus}\nВаш баланс: <b>{balance} GRAM</b>.','buttons':[{'text':'Открыть профиль','action':'app','target':'profile','style':'success'}]},
+    'hat_deposit_choice': {'label':'Шляпа получена: стейкинг или баланс','text':'🎩 <b>{gift}</b> получена.\nВыберите, куда её положить: в стейкинг или на баланс.\nНа баланс: <b>{value} GRAM</b>.\nДоход стейкинга считается от флора обычной шляпы.','buttons':[{'text':'В стейкинг','action':'hat','target':'staking','style':'primary'},{'text':'На баланс · {value} GRAM','action':'hat','target':'balance','style':'success'}]},
+    'welcome': {'label': 'Приветствие /start', 'text': '👋 Привет, {name}! Добро пожаловать в HatDrop.\n\nВыбирайте режим, открывайте сундуки и собирайте подарки. Нажмите «Играть», чтобы открыть меню.', 'buttons': [PLAY]},
+    'help': {'label': 'Помощь /help', 'text': '🎩 HatDrop\n\nНажмите «Играть», чтобы выбрать режим. Ваши подарки и заявки на вывод доступны в профиле.', 'buttons': [PLAY]},
+    'admin_withdraw_new': {'label': 'Админу: новая заявка на вывод', 'text': '{gift_emoji} Новая заявка на вывод\n{gift} · {value} GRAM\n{user} · ID {id}', 'buttons': []},
+    'admin_withdraw_error': {'label': 'Админу: ошибка автовывода', 'text': '⚠️ Автовывод не удался\n{gift_emoji} {gift} → {user}\nОшибка релейера: {error}', 'buttons': []},
+    'admin_withdraw_new': {'label': 'Админу: новая заявка на вывод', 'text': '{gift_emoji} <b>Новая заявка на вывод</b>\n{gift} · {value} GRAM\n{user} · ID <code>{id}</code>', 'buttons': []},
+    'admin_withdraw_error': {'label': 'Админу: ошибка передачи подарка', 'text': '⚠️ <b>Не удалось передать подарок</b>\n{gift_emoji} {gift} → {user}\nОшибка: <code>{error}</code>\nПовторите попытку или передайте подарок вручную.', 'buttons': []},
+    'boss_victory': {'label': 'Босс: победа и награды', 'text': '🏆 <b>Босс «{season}» побеждён!</b>\nВы заняли {place} место.\n\nВаши награды:\n{gift_emoji}\n\nПодарки уже в вашем инвентаре. Валюта зачислена на баланс, снаряжение и оформления — в коллекцию.', 'buttons': [{'text': 'Открыть инвентарь', 'action': 'app', 'target': 'profile', 'style': 'success'}]},
+    'boss_victory_none': {'label': 'Босс: победа без награды за место', 'text': '🏆 <b>Босс «{season}» побеждён!</b>\nВы заняли {place} место. Спасибо за участие! За это место награда не предусмотрена.', 'buttons': [{'text': 'Открыть инвентарь', 'action': 'app', 'target': 'profile', 'style': 'default'}]},
+    'boss_expired': {'label': 'Босс: время вышло', 'text': '⌛ К сожалению, вы не успели победить босса «{season}». Время вышло.\nВаше место: {place}. Награды за этот бой не выдаются. Удачи в следующем сражении!', 'buttons': [{'text': 'Открыть игру', 'action': 'app', 'target': 'menu', 'style': 'default'}]},
+    'boss_cancelled': {'label': 'Босс: бой завершён вручную', 'text': 'Бой с боссом «{season}» завершён досрочно. Босс не был побеждён, награды не выдаются.\nВаше место: {place}.', 'buttons': [{'text': 'Открыть игру', 'action': 'app', 'target': 'menu', 'style': 'default'}]},
+    'season_place_prize': {'label': 'Место в топе: есть награда', 'text': '🏆 Сезон «{season}» завершён! Вы заняли {place} место.\nНаграда: {gift_emoji} <b>{gift}</b> — уже в вашем инвентаре.', 'buttons': [{'text': 'Открыть', 'action': 'app', 'target': 'profile', 'style': 'danger'}]},
+    'season_place_none': {'label': 'Место в топе: без награды', 'text': '🏆 Сезон «{season}» завершён! Вы заняли {place} место. За это место награды нет — попробуйте в следующем сезоне!', 'buttons': [{'text': 'Открыть', 'action': 'app', 'target': 'profile', 'style': 'danger'}]},
+    'withdraw_pending': {'label': 'Заявка на вывод отправлена', 'text': '📨 Запрос на вывод {gift_emoji} {gift} отправлен. Ожидайте — мы сообщим, когда подарок будет у вас.', 'buttons': [{'text': 'Открыть', 'action': 'app', 'target': 'profile', 'style': 'danger'}]},
+    'withdraw_completed': {'label': 'Подарок выдан (вручную или автоматически)', 'text': '✅ {gift_emoji} {gift} отправлен вам! Проверьте свои подарки в Telegram.', 'buttons': [{'text': 'Открыть', 'action': 'app', 'target': 'profile', 'style': 'danger'}]},
+    'withdraw_rejected': {'label': 'Вывод отклонён', 'text': '❌ Ваша заявка на вывод {gift_emoji} {gift} отклонена. Подарок вернулся в инвентарь.', 'buttons': [{'text': 'Открыть', 'action': 'app', 'target': 'profile', 'style': 'danger'}]},
+}
+FORMAT_TAGS = ('b', 'i', 'u', 's', 'code', 'pre', 'tg-spoiler', 'blockquote')
+FORMAT_RE = re.compile(r'<(/?)(' + '|'.join(FORMAT_TAGS) + r')>')
+FORMAT_ESCAPED_RE = re.compile(r'&lt;(/?)(' + '|'.join(FORMAT_TAGS) + r')&gt;')
+
+
+def check_format(text):
+
+    stack = []
+    for m in FORMAT_RE.finditer(text):
+        if not m.group(1):
+            stack.append(m.group(2))
+        elif not stack or stack.pop() != m.group(2):
+            raise ValueError('message_format_invalid')
+    if stack:
+        raise ValueError('message_format_invalid')
+
+
+def safe_text(segment):
+
+    return FORMAT_ESCAPED_RE.sub(lambda m: f'<{m.group(1)}{m.group(2)}>', escape(segment, quote=False))
+
+
+EMOJI_ID_RE = re.compile(r'[0-9]{5,30}')
+TOKEN_RE = re.compile(r'\{(name|gift|gift_emoji|value|user|id|mode|error|place|season|balance|bonus|date|gift_link|ton_emoji)\}|\[emoji:([0-9]{5,30}):([^\]\r\n]{1,16})\]')
+APP_VIEWS = ('menu', 'upgrade', 'chests', 'profile','staking')
+BUTTON_STYLES = ('default', 'primary', 'success', 'danger')
+MAX_CUSTOM_COMMANDS = 98
+
+
+def command_name(value):
+    if not isinstance(value, str):
+        raise ValueError('command_name_invalid')
+    name = value.strip().removeprefix('/').lower()
+    if not re.fullmatch(r'[a-z0-9_]{1,32}', name):
+        raise ValueError('command_name_invalid')
+    if name in ('start', 'help'):
+        raise ValueError('command_reserved')
+    return name
+
+
+def validate_command(value):
+    description = value.get('description') if isinstance(value, dict) else None
+    if not isinstance(description, str) or not description.strip() or len(description.encode('utf-16-le')) // 2 > 256:
+        raise ValueError('command_description_invalid')
+    return {**validate_message(value), 'description': description.strip()}
+
+
+def commands_config(saved):
+    result = {}
+    if isinstance(saved, dict):
+        for name, value in list(saved.items())[:MAX_CUSTOM_COMMANDS]:
+            try:
+                result[command_name(name)] = validate_command(value)
+            except ValueError:
+                pass
+    return result
+
+
+def valid_url(value):
+    if not isinstance(value, str) or len(value) > 512 or any(c.isspace() for c in value):
+        return False
+    try:
+        p = urlsplit(value)
+        return p.scheme == 'https' and bool(p.hostname) and not p.username and not p.password
+    except ValueError:
+        return False
+
+
+def validate_message(value):
+    if not isinstance(value, dict):
+        raise ValueError('message_invalid')
+    text = value.get('text')
+
+    if not isinstance(text, str) or not text.strip() or len(text.encode('utf-16-le')) // 2 > 3500:
+        raise ValueError('message_text_invalid')
+    check_format(text)
+    buttons = value.get('buttons', [])
+    if not isinstance(buttons, list) or len(buttons) > 8:
+        raise ValueError('message_buttons_invalid')
+    clean = []
+    for b in buttons:
+        if not isinstance(b, dict):
+            raise ValueError('message_button_invalid')
+        label, action, target, style = b.get('text'), b.get('action'), b.get('target'), b.get('style', 'default')
+        if not isinstance(label, str) or not label.strip() or len(label) > 64 or style not in BUTTON_STYLES:
+            raise ValueError('message_button_invalid')
+        if action == 'app':
+            if target not in APP_VIEWS:
+                raise ValueError('message_button_target_invalid')
+        elif action == 'url':
+            if not valid_url(target):
+                raise ValueError('message_button_url_invalid')
+        elif action == 'hat':
+            if target not in ('staking','balance'):raise ValueError('message_button_target_invalid')
+        else:
+            raise ValueError('message_button_action_invalid')
+        item = {'text': label.strip(), 'action': action, 'target': target, 'style': style}
+        icon = str(b.get('icon') or '').strip()
+        if icon:
+            if not EMOJI_ID_RE.fullmatch(icon):
+                raise ValueError('message_button_invalid')
+            item['icon'] = icon
+        clean.append(item)
+    return {'text': text.strip(), 'buttons': clean}
+
+
+def messages_config(saved):
+    result = deepcopy(DEFAULT_MESSAGES)
+    if isinstance(saved, dict):
+        for key, value in saved.items():
+            if key in result:
+                try:
+                    result[key].update(validate_message(value))
+                except ValueError:
+                    pass
+    return result
+
+
+def message_payload(config, key, app_url, name='друг', gift='подарок', gift_emoji='', extra=None):
+    item = config[key]
+    replacements = {'name': str(name or 'друг')[:120], 'gift': str(gift or 'подарок')[:200],
+                    **{k: str(v)[:300] for k, v in (extra or {}).items()}}
+    for k in ('value', 'user', 'id', 'mode', 'error', 'place', 'season','balance','bonus','date'):
+        replacements.setdefault(k, '')
+
+
+    def repl(m):
+        if m.group(1) in ('gift_link','ton_emoji'):return str((extra or {}).get(m.group(1),'🎁'))
+        if m.group(1) == 'gift_emoji':
+            return gift_emoji or '🎁'
+        if m.group(1):
+            return escape(replacements[m.group(1)], quote=False)
+        return f'<tg-emoji emoji-id="{m.group(2)}">{escape(m.group(3), quote=False)}</tg-emoji>'
+    out, pos = [], 0
+    for m in TOKEN_RE.finditer(item['text']):
+        out.append(safe_text(item['text'][pos:m.start()]))
+        out.append(repl(m))
+        pos = m.end()
+    out.append(safe_text(item['text'][pos:]))
+    text = ''.join(out)
+    rows = []
+    for b in item['buttons']:
+        button = {'text': re.sub(r'\{(value|balance|name|gift)\}',lambda match:replacements.get(match[1],''),b['text'])[:64]}
+        if b.get('icon'):
+            button['icon_custom_emoji_id'] = b['icon']
+        if b['style'] != 'default':
+            button['style'] = b['style']
+        if b['action'] == 'app':
+            if not valid_url(app_url):
+                continue
+            p = urlsplit(app_url)
+            query = [(k, v) for k, v in parse_qsl(p.query, keep_blank_values=True) if k != 'view']
+            query.append(('view', b['target']))
+            button['web_app'] = {'url': urlunsplit((p.scheme, p.netloc, p.path or '/', urlencode(query), p.fragment))}
+        elif b['action']=='hat':
+            prize_id=(extra or {}).get('prize_id')
+            if key!='hat_deposit_choice' or not isinstance(prize_id,int) or prize_id<=0:continue
+            button['callback_data']=f'hat:{b["target"]}:{prize_id}'
+        else:
+            button['url'] = b['target']
+        rows.append([button])
+    result = {'text': text, 'html': True}
+    if rows:
+        result['reply_markup'] = {'inline_keyboard': rows}
+    return result

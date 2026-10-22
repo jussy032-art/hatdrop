@@ -1,0 +1,537 @@
+
+
+html[data-halloween="on"] {
+ --hw-ui-panel:#4a5778; --hw-ui-recess:#323b58; --hw-ui-control:#58668a;
+ --hw-ui-active:#64729a; --hw-ui-edge:#1f2540; --hw-ui-shine:#7683aa;
+ --hw-ui-text:#f4f6fc; --hw-ui-muted:#c4cce2; --hw-ui-accent:#ffc261;
+ --hw-ui-button:#f08e3a; --hw-ui-button-shine:#ffbd80; --hw-ui-button-edge:#9a4313;
+ --hw-ui-range:#ffb347; --hw-ui-range-dark:#c4701c;
+}
+html[data-halloween="on"][data-sky="night"] {
+ --hw-ui-panel:#364260; --hw-ui-recess:#232b44; --hw-ui-control:#43506f;
+ --hw-ui-active:#4e5b7e; --hw-ui-edge:#171c31; --hw-ui-shine:#5f6c92;
+ --hw-ui-text:#eef1fa; --hw-ui-muted:#aab4cf; --hw-ui-accent:#ffc261;
+ --hw-ui-button:#ee8a36; --hw-ui-button-shine:#ffb878; --hw-ui-button-edge:#9a4313;
+ --hw-ui-range:#ffb347; --hw-ui-range-dark:#c4701c;
+}
+
+
+
+.halloween-scene, .halloween-badge { display: none; }
+html[data-halloween="on"] { background: #0d091b; color-scheme: dark; }
+html[data-halloween="on"] body,
+html[data-halloween="on"] body.tier-onyx,
+html[data-halloween="on"] body.tier-black {
+  --sky-0: #100b20;
+  --violet: #a366db;
+  --violet-soft: #d8abff;
+  --violet-dark: #35204f;
+  --gold: #ffad39;
+  --gold-soft: #ffdf8a;
+  --gold-dark: #ad4c1f;
+  --green: #8ada69;
+  --green-dark: #4c8141;
+  --red: #fa6460;
+  --text: var(--hw-ui-text);
+  --muted: var(--hw-ui-muted);
+  --card: var(--hw-ui-panel);
+  --card-line: #6b407a;
+  --track-bg: #251433;
+  --cta-edge: #6f2b26;
+  --cta-shine: #ffc35b;
+  --wheel-lose-a: #49305e;
+  --wheel-lose-b: #24152f;
+  --wheel-base: #28143a;
+  --wheel-glow: rgba(251,111,41,.25);
+  --wheel-core-a: #492454;
+  --wheel-core-b: #1d102a;
+  --wheel-core-shine: #ffab53;
+  background: #100a1c;
+  color: var(--text);
+}
+html[data-halloween="on"] .bg-wide {
+  display: block;
+  position: fixed;
+  inset: 0;
+  z-index: 0;
+  overflow: hidden;
+  pointer-events: none;
+  background: #120b22 !important;
+}
+html[data-halloween="on"] .bg-wide #villageScene { display: none !important; }
+html[data-halloween="on"] .bg-wide .halloween-scene {
+  display: block;
+  position: absolute;
+  width: 100%;
+  height: 100%;
+  inset: 0;
+  object-fit: cover;
+  object-position: center center;
+  image-rendering: pixelated;
+}
+html[data-halloween="on"] .bg-wide::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  background: repeating-linear-gradient(0deg, transparent 0 5px, rgba(13,5,25,.045) 6px 7px);
+}
+html[data-halloween="on"] .bg-wide .bg-dim {
+  display: block;
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(180deg, rgba(11,7,21,.04), rgba(13,6,25,.2) 65%, rgba(8,4,13,.4)) !important;
+}
+html[data-halloween="on"] body[data-view="profile"] .bg-dim,
+html[data-halloween="on"] body[data-view="leaders"] .bg-dim { background: rgba(18,32,46,.32) !important; }
+html[data-halloween="on"] .stage { z-index: 1; }
+html[data-halloween="on"] .bg-sky,
+html[data-halloween="on"] .bg-art,
+html[data-halloween="on"] .bg-stars,
+html[data-halloween="on"] .bg-vignette { opacity: 0 !important; visibility: hidden; }
+html[data-halloween="on"] .bolt { display: none; }
+
+html[data-halloween="on"] .halloween-badge {
+  display: block;
+  width: fit-content;
+  margin: 0 auto 15px;
+  padding: 7px 9px;
+  background: var(--hw-ui-control);
+  color: var(--hw-ui-accent);
+  border: 3px solid var(--hw-ui-edge);
+  box-shadow: 3px 3px 0 #a55836, inset 2px 2px 0 var(--hw-ui-shine);
+  font-size: 8px;
+  line-height: 1.8;
+  text-align: center;
+  letter-spacing: .4px;
+  animation: halloween-glint 4.4s steps(2, end) infinite;
+}
+html[data-halloween="on"] .title {
+  color: var(--hw-ui-accent);
+  text-shadow: 0 2px 0 var(--hw-ui-edge) !important;
+}
+html[data-halloween="on"] :is(.subtitle,.section-title,.lang-label,.empty) { color: var(--hw-ui-text); }
+html[data-halloween="on"] :is(.topbar .wallet-btn,.topbar .balance,.topbar .coin-chip) {
+  color: var(--hw-ui-text);
+  background: var(--hw-ui-panel) !important;
+  border: 2px solid var(--hw-ui-edge) !important;
+  border-radius: 3px !important;
+  box-shadow: inset 0 1px 0 var(--hw-ui-shine) !important;
+}
+html[data-halloween="on"] .topbar .bal-plus { background: #ef8032; color: #210e20; border-radius: 0; }
+html[data-halloween="on"] .tabbar {
+  background: var(--hw-ui-recess) !important;
+  border: 2px solid var(--hw-ui-edge) !important;
+  border-radius: 3px !important;
+  box-shadow: inset 0 1px 0 var(--hw-ui-shine) !important;
+}
+html[data-halloween="on"] .tabbar::before,
+html[data-halloween="on"] .tabbar::after { display: none !important; }
+html[data-halloween="on"] .tab { color: var(--hw-ui-muted) !important; background: transparent !important; border-radius: 0 !important; }
+html[data-halloween="on"] .tab.active {
+  color: var(--hw-ui-accent) !important;
+  background: var(--hw-ui-active) !important;
+  box-shadow: inset 0 -2px 0 var(--hw-ui-accent) !important;
+}
+html[data-halloween="on"] :is(.menu-card,.profile-head,.lvl-row,.pstat,.ref-card,.prize-card,.lb-row,.lb-me,.hist-row,.pcard,.shell-prize,.upgrade-prize,.cx-info > div,.cx-setup,.gp-item,.gift-item) {
+  background: var(--hw-ui-panel) !important;
+  color: var(--hw-ui-text);
+  border: 2px solid var(--hw-ui-edge) !important;
+  border-radius: 3px !important;
+  box-shadow: inset 0 1px 0 var(--hw-ui-shine) !important;
+}
+html[data-halloween="on"] .menu-card {
+  background: var(--hw-ui-panel) !important;
+  transition: transform .12s steps(3,end), background .12s steps(3,end);
+}
+html[data-halloween="on"] .menu-card:active { transform: translate(2px,3px); background: var(--hw-ui-active) !important; }
+html[data-halloween="on"] .menu-card .mc-title { color: var(--hw-ui-accent); }
+html[data-halloween="on"] .menu-card .mc-sub { color: var(--hw-ui-muted); }
+html[data-halloween="on"] :is(.cta,.spin-btn,.fast-btn,#cxBtn,.promo-btn,.pbtn,.wd-btn,.sell-all) {
+  color: #26313a !important;
+  background: var(--hw-ui-button) !important;
+  border: 2px solid var(--hw-ui-edge) !important;
+  border-radius: 3px !important;
+  box-shadow: inset 0 2px 0 var(--hw-ui-button-shine), inset 0 -2px 0 var(--hw-ui-button-edge) !important;
+  text-shadow: none !important;
+}
+html[data-halloween="on"] :is(.cta,.spin-btn,.fast-btn,#cxBtn,.promo-btn,.pbtn,.wd-btn,.sell-all):disabled {
+  filter: grayscale(.6) brightness(.76);
+  box-shadow: none !important;
+}
+html[data-halloween="on"] :is(.ghost,.view-back,.gp-back,.lang-btn,.cx-chip,.mode-btn,.gp-sort button) {
+  background: var(--hw-ui-control) !important;
+  border: 2px solid var(--hw-ui-edge) !important;
+  color: var(--hw-ui-accent) !important;
+  border-radius: 3px !important;
+  box-shadow: inset 0 1px 0 var(--hw-ui-shine) !important;
+}
+html[data-halloween="on"] :is(input,select,textarea,.cx-bet) {
+  background-color: var(--hw-ui-recess);
+  color: var(--hw-ui-text);
+  border-color: #8b5786;
+  border-radius: 2px !important;
+}
+html[data-halloween="on"] :is(input,select,textarea):focus-visible { outline: 2px solid #ffab47; outline-offset: 2px; }
+html[data-halloween="on"] :is(.modal,.modal[hidden]) { background: rgba(10,21,33,.78); }
+html[data-halloween="on"] :is(.modal-card,.list-modal,.gp-card,.settings-modal) {
+  background: var(--hw-ui-panel) !important;
+  color: var(--hw-ui-text);
+  border: 2px solid var(--hw-ui-edge) !important;
+  border-radius: 4px !important;
+  box-shadow: inset 0 1px 0 var(--hw-ui-shine) !important;
+}
+html[data-halloween="on"] .modal-card :is(.adm-box,.lv-row,.hist-row,.gift-item,.prize-card) {
+  background: var(--hw-ui-recess) !important;
+  border-color: var(--hw-ui-edge) !important;
+  border-radius: 3px !important;
+}
+html[data-halloween="on"] :is(.adm-tabs button,.adm-form button,.adm-wd-toolbar button,.adm-wd-switch button) {
+  border-radius: 2px !important;
+}
+html[data-halloween="on"] :is(.adm-tabs button.on,.adm-wd-switch button.on) {
+  color: #2a1020 !important;
+  background: #fa993b !important;
+}
+html[data-halloween="on"] .wheel-glow { filter: hue-rotate(125deg) saturate(1.2); }
+html[data-halloween="on"] .wheel-center { filter: drop-shadow(0 0 7px rgba(242,128,57,.4)); }
+html[data-halloween="on"] .wheel-scale text { fill: #ffe3b7; }
+html[data-halloween="on"] :is(.cx-grid,.cx-cell,.cx-cell img) { image-rendering: pixelated; }
+html[data-halloween="on"] .cx-cell { border-radius: 5px !important; }
+
+.halloween-admin-box { margin: 10px 0 14px; }
+.halloween-switch-row {
+  display: flex; align-items: center; justify-content: space-between; gap: 12px;
+  padding: 13px 10px; cursor: pointer;
+  background: #25182f; color: #fff0da; border: 3px solid #160e20;
+  box-shadow: inset 2px 2px 0 #6d437a;
+}
+.halloween-switch-copy { display: flex; flex-direction: column; gap: 8px; min-width: 0; }
+.halloween-switch-copy b { font-size: 9px; line-height: 1.7; font-weight: 400; }
+.halloween-switch-copy small { color: #dcbdcb; font-size: 7px; line-height: 1.7; }
+.halloween-switch-row input { position: absolute; width: 1px; height: 1px; opacity: 0; }
+.halloween-switch-track {
+  display: flex; flex: 0 0 56px; width: 56px; height: 30px; align-items: center;
+  padding: 3px; background: #56445c; border: 3px solid #110c1b;
+  box-shadow: inset 2px 2px 0 #34213f; transition: background .15s steps(3,end);
+}
+.halloween-switch-track > span {
+  display: block; width: 19px; height: 18px; background: #d4bbca;
+  border: 2px solid #27192c; box-shadow: inset 2px 2px 0 #f8e8ee;
+  transition: transform .15s steps(3,end);
+}
+.halloween-switch-row input:checked + .halloween-switch-track { background: #ed8337; }
+.halloween-switch-row input:checked + .halloween-switch-track > span { transform: translateX(24px); background: #ffe0a6; }
+.halloween-switch-row input:focus-visible + .halloween-switch-track { outline: 3px solid #ffca77; outline-offset: 3px; }
+.halloween-switch-row input:disabled + .halloween-switch-track { opacity: .55; }
+@keyframes halloween-glint { 0%,78%,100% {color:var(--hw-ui-accent)} 80%,88% {color:#fff1bb} }
+@media (max-width: 380px) {
+  html[data-halloween="on"] .halloween-badge { font-size: 7px; }
+  .halloween-switch-copy b { font-size: 8px; }
+}
+@media (prefers-reduced-motion: reduce) {
+  html[data-halloween="on"] .halloween-badge { animation: none !important; }
+  .halloween-switch-track, .halloween-switch-track > span { transition: none; }
+}
+
+
+html[data-halloween="on"][data-sky="night"],
+html[data-halloween="on"][data-sky="night"] body { background:#110b20!important; }
+html[data-halloween="on"] .sky-btn {
+  background:var(--hw-ui-control)!important;border-color:var(--hw-ui-edge)!important;border-radius:3px!important;
+  box-shadow:inset 2px 2px 0 var(--hw-ui-shine),0 3px 0 #10081a!important;
+}
+html[data-theme="meadow"][data-weapon="skeleton"] .pointer > * { display:none!important; }
+html[data-theme="meadow"][data-weapon="skeleton"] .pointer > .ptr-skeleton {
+  display:inline!important;image-rendering:auto;opacity:1;
+}
+html[data-theme="meadow"][data-weapon="staff"] .pointer > .ptr-skeleton { display:none!important; }
+html[data-theme="meadow"][data-weapon="axe"] .pointer > .ptr-skeleton { display:none!important; }
+html[data-theme="meadow"] .pointer > .ptr-skeleton { display:none; }
+html[data-theme="meadow"][data-weapon="skeleton"] .pointer {
+  filter:drop-shadow(2px 3px 0 rgba(17,9,26,.9)) drop-shadow(0 0 7px rgba(246,218,181,.55));
+}
+html[data-halloween="on"] #weaponMenu button[data-weapon="skeleton"] { border-color:#a35c80; }
+html[data-halloween="on"] .wheel-center .hat { filter:drop-shadow(0 0 11px rgba(252,146,69,.4)); }
+.pumpkin-scare[hidden] { display:none!important; }
+.pumpkin-scare {
+  position:fixed;left:50%;top:30%;z-index:1500;transform:translateX(-50%);
+  width:min(260px,82vw);pointer-events:none;
+  display:flex;align-items:center;flex-direction:column;gap:3px;
+  padding:14px 16px 12px;
+  background:rgba(24,9,33,.96);color:#ffce90;
+  border:4px solid #eb7834;outline:4px solid rgba(12,6,21,.8);
+  box-shadow:0 8px 0 #190b26,0 12px 28px rgba(0,0,0,.62);
+  text-align:center;
+  animation:scareBurst .95s cubic-bezier(.18,.86,.27,1) both;
+}
+.pumpkin-scare svg{display:block;width:104px;height:104px;image-rendering:pixelated;filter:drop-shadow(0 3px 0 #230d21);}
+.pumpkin-scare strong{display:block;font-size:10px;line-height:1.8;text-shadow:2px 2px #421c37;}
+.pumpkin-scare small{font-size:8px;line-height:1.4;color:#e2b4bb;}
+@keyframes scareBurst {
+  0%{opacity:0;transform:translate(-50%,28px) scale(.3) rotate(-9deg)}
+  37%{opacity:1;transform:translate(-50%,0) scale(1.09) rotate(3deg)}
+  53%{transform:translate(-50%,0) scale(.97) rotate(-2deg)}
+  74%{opacity:1;transform:translate(-50%,0) scale(1)}
+  100%{opacity:0;transform:translate(-50%,-12px) scale(.94)}
+}
+@media (prefers-reduced-motion:reduce){.pumpkin-scare{animation:scareQuiet .95s ease both}}
+@keyframes scareQuiet{0%{opacity:0}20%,75%{opacity:1}100%{opacity:0}}
+
+
+html[data-halloween="on"] #view-chests .cx-cell.gold:not(.cx-revealed) img{animation:candyReveal .38s steps(5,end) 1!important;}
+html[data-halloween="on"] #view-chests .cx-cell.empty.hit img{animation:skeletonRattle .6s steps(6,end) 1!important;}
+@keyframes candyReveal{0%{transform:scale(.86)}50%{transform:scale(1.08)}100%{transform:scale(1)}}
+@keyframes skeletonRattle{0%,100%{transform:translateX(0)}20%,60%{transform:translateX(-2px)}40%,80%{transform:translateX(2px)}}
+@media(prefers-reduced-motion:reduce){
+ html[data-halloween="on"] #view-chests .cx-cell.gold:not(.cx-revealed) img,html[data-halloween="on"] #view-chests .cx-cell.empty.hit img{animation:none!important;}
+}
+
+
+html[data-theme="meadow"] #weaponBtn { overflow: hidden; }
+html[data-theme="meadow"] #weaponBtn img { display: block; width: 40px; height: 40px; max-width: 80%; max-height: 80%; object-fit: contain; image-rendering: auto; transform: none; }
+html[data-theme="meadow"] #weaponMenu img { width: 30px; height: 30px; flex: 0 0 30px; image-rendering: auto; }
+
+
+#halloweenScene {
+ --hw-lights: 1; --hw-pumpkin: #df6f26; --hw-pumpkin-light: #f99c3c; --hw-pumpkin-dark: #ae4b28; --hw-stem: #5f823d; --hw-sky-top: #121c37; --hw-sky-low: #345878; --hw-moon: #c5ecff; --hw-crater: #8bc3df;
+ --hw-cloud: #517490; --hw-forest-far: #294459; --hw-forest: #1c3649; --hw-tree: #122937;
+ --hw-leaf: #244251; --hw-wall: #38445a; --hw-roof: #3f3d52; --hw-stone: #68758c; --hw-stone-dark: #343c52;
+ --hw-bark: #30283b; --hw-bark-light: #594357; --hw-ground: #354a51; --hw-ground-front: #263e45;
+ --hw-path: #506269; --hw-window: #b97436; --hw-banner: #ef7928; --hw-ghost: #b1e5ff; --hw-grain: #7c909a; --hw-fog: #acd7ef;
+}
+html[data-sky="day"] #halloweenScene {
+ --hw-lights:0; --hw-pumpkin:#d99b56; --hw-pumpkin-light:#f8c379; --hw-pumpkin-dark:#b57b55; --hw-stem:#697f55;
+ --hw-sky-top:#6285b4; --hw-sky-low:#c4e0e5; --hw-moon:#ffedc4; --hw-crater:#ecd6b1;
+ --hw-cloud:#edf2e5; --hw-forest-far:#96b8b5; --hw-forest:#779a94; --hw-tree:#577975;
+ --hw-leaf:#82a59b; --hw-wall:#9296ad; --hw-roof:#827e9d; --hw-stone:#bab6c0; --hw-stone-dark:#777588;
+ --hw-bark:#595166; --hw-bark-light:#8b7d90; --hw-ground:#819d88; --hw-ground-front:#688875;
+ --hw-path:#b3b7a0; --hw-window:#526575; --hw-banner:#dba76e; --hw-ghost:#f7f0e1; --hw-grain:#b4c9a9; --hw-fog:#e2eede;
+}
+#halloweenScene { image-rendering: auto; }
+#halloweenScene .hw-light, #halloweenScene .hw-night-detail { opacity: var(--hw-lights); transition: opacity .75s ease; }
+html[data-sky="day"] #halloweenScene .hw-stars { animation: none; }
+#halloweenScene .hw-lamp { fill: var(--hw-window); }
+#halloweenScene .hw-cloud { animation: hwCloud 38s ease-in-out infinite alternate; }
+#halloweenScene .hw-fog { animation: hwFog 16s ease-in-out infinite alternate; }
+#halloweenScene .hw-spirit { animation: hwSpirit 4s ease-in-out infinite alternate; }
+#halloweenScene .hw-spirit-alt { animation-duration: 5.7s; animation-delay: -2s; }
+#halloweenScene .hw-bat-flight { animation: hwBatFly 24s linear infinite; will-change: transform; }
+#halloweenScene .hw-bat-1 { animation-delay: -6s; }
+#halloweenScene .hw-bat-2 { animation-duration: 31s; animation-delay: -17s; }
+#halloweenScene .hw-bat-3 { animation-duration: 28s; animation-delay: -23s; animation-direction: reverse; }
+#halloweenScene .hw-bat-4 { animation-duration: 38s; animation-delay: -12s; }
+#halloweenScene .hw-bat-5 { animation-duration: 26s; animation-delay: -19s; animation-direction: reverse; }
+#halloweenScene .hw-bat-6 { animation-duration: 34s; animation-delay: -4s; }
+#halloweenScene .hw-bat-body { animation: hwBatBob 1.8s ease-in-out infinite alternate; }
+#halloweenScene .hw-bat-2 .hw-bat-body, #halloweenScene .hw-bat-4 .hw-bat-body { animation-delay: -.9s; }
+#halloweenScene .wing-left { transform-box: fill-box; transform-origin: right center; animation: hwWingLeft .18s ease-in-out infinite alternate; }
+#halloweenScene .wing-right { transform-box: fill-box; transform-origin: left center; animation: hwWingRight .18s ease-in-out infinite alternate; }
+#halloweenScene .hw-stars { animation: hwTwinkle 5.8s ease-in-out infinite alternate; }
+html[data-halloween="on"][data-sky="day"] .bg-wide .bg-dim { background: linear-gradient(180deg, rgba(36,53,79,0), rgba(36,53,79,.04) 65%, rgba(36,53,79,.13)) !important; }
+html[data-halloween="on"] .bg-wide::after { background: linear-gradient(90deg, rgba(4,8,18,.16), transparent 20%, transparent 80%, rgba(4,8,18,.16)); }
+#halloweenScene.scene-paused *, html:not([data-halloween="on"]) #halloweenScene * { animation-play-state: paused !important; }
+#halloweenScene.scene-instant * { transition: none !important; }
+@keyframes hwCloud { to { transform: translateX(34px); } }
+@keyframes hwFog { to { transform: translateX(24px); opacity: .28; } }
+@keyframes hwSpirit { to { transform: translateY(-11px) rotate(3deg); } }
+@keyframes hwBatFly { 0% { transform: translate(-180px, 10px) rotate(-3deg); } 25% { transform: translate(240px, -18px) rotate(2deg); } 50% { transform: translate(660px, 15px) rotate(-2deg); } 75% { transform: translate(1080px, -14px) rotate(3deg); } 100% { transform: translate(1500px, 9px) rotate(-3deg); } }
+@keyframes hwBatBob { to { transform: translateY(-5px); } }
+@keyframes hwWingLeft { from { transform: rotate(15deg); } to { transform: rotate(-24deg); } }
+@keyframes hwWingRight { from { transform: rotate(-15deg); } to { transform: rotate(24deg); } }
+@keyframes hwTwinkle { to { opacity: .4; } }
+
+
+html[data-halloween="on"][data-sky="day"] body {
+ --wheel-lose-a: #9b96a9; --wheel-lose-b: #51475e; --wheel-base: #3e364b;
+ --wheel-core-a: #6b6178; --wheel-core-b: #302a3d; --wheel-core-shine: #cfc0df; --wheel-glow: rgba(222,209,241,.24);
+}
+html[data-halloween="on"][data-sky="night"] body {
+ --wheel-lose-a: #3b649c; --wheel-lose-b: #202e54; --wheel-base: #17273f;
+ --wheel-core-a: #3a577c; --wheel-core-b: #14213b; --wheel-core-shine: #98dfff; --wheel-glow: rgba(111,184,255,.34);
+}
+html[data-halloween="on"] #gradWin stop:first-child { stop-color: #e5b6ff; }
+html[data-halloween="on"] #gradWin stop:last-child { stop-color: #9c68d6; }
+html[data-halloween="on"][data-sky="night"] #gradWin stop:first-child { stop-color: #ffd783; }
+html[data-halloween="on"][data-sky="night"] #gradWin stop:last-child { stop-color: #f08b3e; }
+html[data-halloween="on"] .ring-edge { stroke: #c3afd9; filter: none; }
+html[data-halloween="on"][data-sky="night"] .ring-edge { stroke: #81cfff; filter: drop-shadow(0 0 5px #5994db); }
+html[data-halloween="on"] #arcWin { filter: drop-shadow(0 0 4px rgba(203,146,244,.4)); }
+html[data-halloween="on"][data-sky="night"] #arcWin { filter: drop-shadow(0 0 5px rgba(255,171,69,.45)); }
+html[data-halloween="on"] .wheel-glow { filter: none; }
+html[data-halloween="on"] .wheel-scale text.on { fill: #ffe1b2; }
+html[data-halloween="on"] .wheel-scale line.on { stroke: #dfb0ef; }
+@media(prefers-reduced-motion:reduce) {
+ #halloweenScene *, #halloweenScene .hw-light, #halloweenScene .hw-night-detail { animation: none !important; transition: none !important; }
+}
+
+html[data-halloween="on"] .scale-plate { fill: #62546e; stroke: #291f39; }
+html[data-halloween="on"] .scale-plate.on { fill: #b597cc; }
+html[data-halloween="on"][data-sky="night"] .scale-plate { fill: #304c76; stroke: #162438; }
+html[data-halloween="on"][data-sky="night"] .scale-plate.on { fill: #bd783d; }
+html[data-halloween="on"] .scale-leg,
+html[data-halloween="on"] .wheel-scale line:not(.scale-leg) { stroke: #b6a4c4; filter: none; }
+html[data-halloween="on"][data-sky="night"] .scale-leg,
+html[data-halloween="on"][data-sky="night"] .wheel-scale line:not(.scale-leg) { stroke: #e5b06d; }
+html[data-halloween="on"] .ring-rim { stroke: #84758f; }
+html[data-halloween="on"][data-sky="night"] .ring-rim { stroke: #5c8cbd; }
+#halloweenScene > rect, #halloweenScene > path, #halloweenScene > circle,
+#halloweenScene stop, #halloweenScene .hw-lamp { transition: fill .75s ease, stop-color .75s ease; }
+
+
+#halloweenScene .hw-cloud-2 { animation-duration:57s; animation-direction:alternate-reverse; }
+#halloweenScene .hw-cloud-3 { animation-duration:46s; animation-delay:-19s; }
+#halloweenScene .hw-cloud-4 { animation-duration:63s; animation-delay:-28s; }
+#halloweenScene .hw-fireflies { animation:hwFireflies 6s ease-in-out infinite alternate; }
+@keyframes hwFireflies { from { transform:translate(0,0); opacity:.35; } to { transform:translate(9px,-13px); opacity:.9; } }
+html[data-halloween="on"][data-sky="day"] #halloweenScene .hw-night-detail { opacity:0; }
+
+
+html[data-halloween="on"] :is(body,body.tier-onyx,body.tier-black) {
+ --card:var(--hw-ui-panel); --card-line:var(--hw-ui-shine); --text:var(--hw-ui-text);
+ --muted:var(--hw-ui-muted); --track-bg:var(--hw-ui-recess); --gold:var(--hw-ui-accent);
+ --violet-dark:var(--hw-ui-control); --violet-soft:var(--hw-ui-range);
+}
+html[data-halloween="on"] .mode-picker {
+ width:min(88%,310px); max-width:100%; padding:0; gap:8px;
+ background:transparent!important; border:0!important; box-shadow:none!important;
+ text-shadow:0 1px 0 var(--hw-ui-edge)!important;
+}
+html[data-halloween="on"] .mode-track { padding:21px 0 19px; }
+html[data-halloween="on"] .mode-cost { top:0; font-size:13px; color:var(--hw-ui-accent); }
+html[data-halloween="on"] .mode-cost .ton-ico { width:20px; height:20px; }
+html[data-halloween="on"] :is(.mode-chance,.mode-edge) { font-size:12px; color:var(--hw-ui-text); }
+html[data-halloween="on"] #modeSlider { background:transparent!important; border:0!important; height:24px; padding:0; }
+html[data-halloween="on"] #modeSlider::-webkit-slider-runnable-track {
+ height:10px; border:2px solid var(--hw-ui-edge); border-radius:3px;
+ background:linear-gradient(to right,var(--hw-ui-range) 0,var(--hw-ui-range-dark) var(--fill,50%),var(--hw-ui-recess) var(--fill,50%),var(--hw-ui-recess) 100%);
+ box-shadow:inset 0 1px 0 var(--hw-ui-shine);
+}
+html[data-halloween="on"] #modeSlider::-webkit-slider-thumb {
+ width:24px; height:24px; margin-top:-9px; border:2px solid var(--hw-ui-edge); border-radius:3px;
+ background:var(--hw-ui-accent); box-shadow:inset 0 1px 0 var(--hw-ui-button-shine);
+}
+html[data-halloween="on"] #modeSlider::-moz-range-track {
+ height:10px; border:2px solid var(--hw-ui-edge); border-radius:3px; background:var(--hw-ui-recess);
+}
+html[data-halloween="on"] #modeSlider::-moz-range-progress { height:10px; background:var(--hw-ui-range); }
+html[data-halloween="on"] #modeSlider::-moz-range-thumb {
+ width:20px; height:20px; border:2px solid var(--hw-ui-edge); border-radius:3px; background:var(--hw-ui-accent);
+}
+html[data-halloween="on"] .chance-custom { color:var(--hw-ui-muted); font-size:9px; }
+html[data-halloween="on"] .chance-custom input { height:32px; padding:5px 4px; border:2px solid var(--hw-ui-edge); background:var(--hw-ui-recess); }
+html[data-halloween="on"] .content { text-shadow:0 1px 0 var(--hw-ui-edge); }
+html[data-halloween="on"] :is(.upgrade-prize,.menu-card .mc-title,.menu-card .mc-sub) { text-shadow:none!important; }
+html[data-halloween="on"] .upgrade-prize { padding:5px 9px; width:fit-content; max-width:100%; font-size:11px; }
+html[data-halloween="on"] :is(.weapon-menu,.settings-modal .lang-row,.gift-how,.gp-price,.up-preview) {
+ background:var(--hw-ui-panel)!important; border-color:var(--hw-ui-edge)!important;
+ box-shadow:inset 0 1px 0 var(--hw-ui-shine)!important; color:var(--hw-ui-text)!important;
+}
+html[data-halloween="on"] .weapon-menu button { background:var(--hw-ui-recess); border-color:var(--hw-ui-edge); color:var(--hw-ui-text); }
+html[data-halloween="on"] .weapon-menu button.on { background:var(--hw-ui-active); border-color:var(--hw-ui-shine); }
+html[data-halloween="on"] :is(input:not([type=range]),select,textarea) { background-color:var(--hw-ui-recess)!important; color:var(--hw-ui-text)!important; border-color:var(--hw-ui-shine)!important; }
+html[data-halloween="on"] :is(.menu-card,.profile-head,.lvl-row,.pstat,.ref-card,.prize-card,.lb-row,.lb-me,.hist-row,.pcard,.upgrade-prize,.cx-info>div,.cx-setup,.modal-card,.tabbar,.topbar .balance,.topbar .wallet-btn,.topbar .coin-chip,.fast-btn,.cta) {
+ transition:background-color .3s ease,border-color .3s ease,color .3s ease;
+}
+html[data-halloween="on"] .sky-btn { background:var(--hw-ui-control)!important; border-color:var(--hw-ui-edge)!important; box-shadow:inset 0 1px 0 var(--hw-ui-shine)!important; }
+html[data-halloween="on"] .topbar .bal-plus { background:var(--hw-ui-button); color:#26313a; }
+html[data-halloween="on"] .wheel-center { filter:none; }
+html[data-halloween="on"] .halloween-badge { animation:none; box-shadow:inset 0 1px 0 var(--hw-ui-shine); border-width:2px; }
+@media(prefers-reduced-motion:reduce) { html[data-halloween="on"] * { transition:none!important; } }
+
+html[data-halloween="on"] .tab { border-color:transparent!important; }
+html[data-halloween="on"] .tab.active { border-color:var(--hw-ui-shine)!important; }
+
+html[data-halloween="on"] :is(.lvl-bar,.ref-stat,.ref-link-box,.promo-input,.dep-wallet,.dep-coins,.copy-row code,.up-sq,.up-input,.cx-win-sum,.gp-item img,.gift-item img) {
+ background:var(--hw-ui-recess)!important; border-color:var(--hw-ui-edge)!important;
+ color:var(--hw-ui-text)!important; box-shadow:inset 0 1px 0 var(--hw-ui-shine)!important;
+}
+html[data-halloween="on"] .lvl-bar i { background:var(--hw-ui-range); box-shadow:none; }
+html[data-halloween="on"] :is(.lvl-badge,.ref-chevron,.ref-copy,.sell-btn,.lang-btn.on,.up-chip,.amt.active,.gp-sort button.active,.up-tab.on) {
+ background:var(--hw-ui-button)!important; border:2px solid var(--hw-ui-edge)!important;
+ color:#26313a!important; border-radius:3px!important;
+ box-shadow:inset 0 1px 0 var(--hw-ui-button-shine)!important;
+}
+html[data-halloween="on"] :is(.promo-input,input)::placeholder { color:var(--hw-ui-muted); }
+html[data-halloween="on"] #weaponMenu button[data-weapon="skeleton"] { border-color:var(--hw-ui-shine); }
+
+html[data-halloween="on"] .modal-card h2 { color:var(--hw-ui-accent); text-shadow:0 1px 0 var(--hw-ui-edge); }
+
+
+
+html[data-halloween="on"] .fast-btn:active:not(:disabled) {
+  transform: translateY(3px) !important;
+  background: var(--hw-ui-active) !important;
+  box-shadow: inset 0 2px 0 var(--hw-ui-shine) !important;
+  filter: brightness(1.08);
+}
+html[data-halloween="on"] .fast-btn[aria-pressed="true"] {
+  transform: translateY(3px) !important;
+  color: #2a1000 !important;
+  background: linear-gradient(180deg, #ffc15a 0%, #f2842b 100%) !important;
+  border-color: #fff0c0 !important;
+  box-shadow: inset 0 2px 0 #ffe2a0, inset 0 -2px 0 #b9500f, 0 0 0 2px #3a1608, 0 0 16px 4px rgba(255, 150, 50, .85) !important;
+  animation: hwFastGlow 1.6s ease-in-out infinite alternate;
+}
+html[data-halloween="on"] .fast-btn[aria-pressed="true"] .ic-bolt { filter: drop-shadow(0 0 3px #fff3c0); }
+@keyframes hwFastGlow { from { filter: brightness(1); } to { filter: brightness(1.18); } }
+@media (prefers-reduced-motion: reduce) { html[data-halloween="on"] .fast-btn[aria-pressed="true"] { animation: none; } }
+
+
+html[data-halloween="on"] .dep-method { background:var(--hw-ui-control)!important; border:3px solid var(--hw-ui-edge)!important; border-radius:4px!important; color:var(--hw-ui-text)!important; box-shadow:3px 3px 0 #a55836, inset 2px 2px 0 var(--hw-ui-shine)!important; }
+html[data-halloween="on"] .dep-method:active:not(:disabled) { background:var(--hw-ui-active)!important; transform:translate(2px,3px); box-shadow:inset 0 2px 0 var(--hw-ui-shine)!important; }
+html[data-halloween="on"] .dep-m-ico, html[data-halloween="on"] .dep-quote, html[data-halloween="on"] .dep-lock { background:var(--hw-ui-recess)!important; border:2px solid var(--hw-ui-edge)!important; border-radius:3px!important; box-shadow:inset 0 1px 0 var(--hw-ui-shine)!important; }
+html[data-halloween="on"] .dep-m-copy b, html[data-halloween="on"] .dep-quote b, html[data-halloween="on"] .dep-lock b { color:var(--hw-ui-accent)!important; }
+html[data-halloween="on"] :is(.dep-m-copy small,.dep-back,.dep-lock small,.dep-quote,.dep-m-arrow,.dep-status) { color:var(--hw-ui-muted)!important; }
+html[data-halloween="on"] :is(.dep-stars-pay,.dep-crypto-pay) { background:var(--hw-ui-button)!important; border:3px solid var(--hw-ui-edge)!important; color:#26313a!important; border-radius:3px!important; box-shadow:inset 0 2px 0 var(--hw-ui-button-shine), inset 0 -3px 0 var(--hw-ui-button-edge)!important; }
+html[data-halloween="on"] :is(#starsAmount,#cryptoAmount,#depositAmount) { background:var(--hw-ui-recess)!important; color:var(--hw-ui-text)!important; border:2px solid var(--hw-ui-edge)!important; border-radius:3px!important; }
+
+
+
+html[data-halloween="on"] .title { color: #ff8a1f !important; text-shadow: 0 3px 0 #5a2208, 0 0 12px rgba(255,138,31,.35) !important; }
+html[data-halloween="on"] .cta,
+html[data-halloween="on"] button.lvl-badge,
+html[data-halloween="on"] .kostyan-quest-action,
+html[data-halloween="on"] .kq-tab.on {
+  background: linear-gradient(180deg, #ffa24d 0%, #ee7a22 100%) !important;
+  border-color: #6a2a0b !important; color: #2a1000 !important;
+  box-shadow: inset 0 2px 0 #ffc891, inset 0 -3px 0 #b5521a, 0 3px 0 #3a1706 !important;
+}
+html[data-halloween="on"] .kq-tab:not(.on) { background: var(--hw-ui-recess) !important; color: var(--hw-ui-muted) !important; }
+html[data-halloween="on"] .cta[disabled], html[data-halloween="on"] .cta:disabled { filter: grayscale(.85); opacity: .6; }
+html[data-halloween="on"] .shop-secondary { background: var(--hw-ui-control) !important; color: var(--hw-ui-text) !important; border-color: var(--hw-ui-edge) !important; box-shadow: inset 0 2px 0 var(--hw-ui-shine), 0 3px 0 #0e1220 !important; }
+html[data-halloween="on"] .modal-card { background: linear-gradient(180deg, #3b4766, #2b3450) !important; border-color: #171c31 !important; box-shadow: inset 0 0 0 2px #5f6c92, 0 6px 0 #0e1220 !important; }
+html[data-halloween="on"] .shop-card, html[data-halloween="on"] .weapon-card { background: linear-gradient(180deg, #3b4766, #2b3450); }
+html[data-halloween="on"] .cx-win-sum b, html[data-halloween="on"] .stat b, html[data-halloween="on"] .shop-price { color: #ffc261; }
+html[data-halloween="on"] .tab.active { background: linear-gradient(180deg, #ffa24d, #ee7a22) !important; border-color: #6a2a0b !important; box-shadow: inset 0 2px 0 #ffc891, 0 3px 0 #3a1706 !important; }
+html[data-halloween="on"] .tab.active svg, html[data-halloween="on"] .tab.active .ic { color: #2a1000 !important; fill: #2a1000 !important; }
+
+
+
+html[data-halloween="on"][data-theme] .tabbar {
+  position: relative;
+  overflow: visible;
+  background: url("/static/halloween/nav-mid.png") center / 100% 100% no-repeat !important;
+  border: 0 !important;
+  border-radius: 0 !important;
+  box-shadow: none !important;
+  padding-left: 92px !important;
+  padding-right: 92px !important;
+}
+html[data-halloween="on"][data-theme] .tabbar::before,
+html[data-halloween="on"][data-theme] .tabbar::after {
+  content: "" !important;
+  display: block !important;
+  position: absolute;
+  top: -50.6% !important;
+  height: 154.4% !important;
+  width: auto !important;
+  aspect-ratio: 519 / 491 !important;
+  pointer-events: none;
+  background-size: 100% 100%;
+  background-repeat: no-repeat;
+}
+html[data-halloween="on"][data-theme] .tabbar::before { left: 0; background-image: url("/static/halloween/nav-left.png"); }
+html[data-halloween="on"][data-theme] .tabbar::after { right: 0; background-image: url("/static/halloween/nav-right.png"); }
+html[data-halloween="on"][data-theme] .tabbar .tab { position: relative; z-index: 1; color: #ffcf9a !important; }
+html[data-halloween="on"][data-theme] .tabbar .tab.active { color: #2a1000 !important; border: 2px solid #4a1f08 !important; border-radius: 3px !important; }

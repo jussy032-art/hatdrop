@@ -1,0 +1,150 @@
+    <div id="admUsers" hidden="">
+      <div class="us-stats" id="usStats"></div>
+      <div class="us-toolbar">
+        <input class="us-search" id="admSearch" type="search" placeholder="Поиск: имя, @username, ID или кошелёк" autocomplete="off">
+        <select id="usSort" aria-label="Сортировка"><option value="seen">Сначала активные</option><option value="balance">По балансу TON</option><option value="hatcoin">По HatCoin</option><option value="turnover">По обороту</option><option value="games">По числу игр</option><option value="created">Сначала новые</option></select>
+      </div>
+      <div class="us-chips" id="usChips"><button type="button" data-f="all" class="on">Все</button><button type="button" data-f="online">Онлайн 24 ч</button><button type="button" data-f="balance">С балансом</button><button type="button" data-f="prizes">С призами</button><button type="button" data-f="wallet">С кошельком</button><button type="button" data-f="banned">Заблокированные</button><button type="button" data-f="admin">Админы</button></div>
+      <div class="us-meta" id="usMeta"></div>
+      <div class="us-list" id="admUserList"></div>
+      <button class="button us-more" id="usMore" type="button" hidden>Показать ещё</button>
+    </div>
+    <div id="admUser" hidden=""></div>
+    <div id="admRtp" hidden=""></div>
+    <div id="admPayments" hidden=""></div>
+    <div id="admEmoji" hidden=""></div>
+    <div id="admSeason" hidden=""></div>
+    <div id="admBroadcast" hidden=""></div>
+    <div id="admShop" hidden=""></div>
+    <div id="admWeapons" hidden=""></div>
+    <div id="admLevels" hidden=""></div>
+    <div id="admDatabase" hidden=""></div>
+    <div id="admRelayer" hidden=""></div>
+    <div id="admMarket" hidden="">
+      <div class="adm-box"><h3>Основной маркет · один источник цен</h3>
+        <select id="admMarketSource"><option value="portals">Portals — модели и цены</option><option value="mrkt">MRKT — модели и цены</option></select>
+        <p id="admMarketSourceHelp" hidden>Остальные маркеты не участвуют в расчёте. Старый смешанный каталог будет удалён при переключении.</p>
+        <button type="button" id="admMarketChoose">Применить маркет и очистить старые цены</button>
+      </div>
+      <div class="adm-box adm-key">
+        <h3>Ключ Portals</h3>
+        <p class="adm-status" id="admPortalsStatus">—</p>
+        <div class="adm-form">
+          <input id="admPortalsKey" type="password" placeholder="Authorization (tma …) — только ключ, адрес не нужен" autocomplete="off" spellcheck="false">
+        </div>
+        <div class="adm-form">
+          <button type="button" id="admPortalsSave">Сохранить</button>
+          <button type="button" id="admPortalsClear" class="danger">Удалить ключ</button>
+        </div>
+      </div>
+      <div class="adm-box"><h3>MRKT — запасной источник моделей</h3>
+        <p class="adm-status" id="admMrktStatus">Ключ не задан</p>
+        <input id="admMrktKey" class="gp-search" type="password" placeholder="Токен MRKT (отдельный от Portals)" autocomplete="off">
+        <div class="adm-form"><button type="button" id="admMrktSave">Сохранить MRKT</button><button type="button" id="admMrktClear" class="danger">Удалить ключ</button></div>
+      </div>
+      <div class="adm-box" id="admMarketAuto"></div>
+      <div class="adm-box" id="admMarketLog"></div>
+      <div class="adm-form"><button class="ghost" id="admRefresh" type="button">Обновить Portals</button><button class="ghost" id="admMrktRefresh" type="button">Обновить MRKT</button></div>
+      <p class="muted" id="admMarketNote" hidden></p>
+      <div class="adm-market" id="admMarketList"></div>
+    </div>
+    <div id="admPromos" hidden="">
+      <div class="adm-box"><h3>Личные реферальные коды: настройки по умолчанию</h3><p class="muted">Новые личные коды используют эти настройки. Один реферальный код на аккаунт, бонус пополнения — один раз, к первому оплаченному счёту. Уже выданные бонусы сохраняют свои условия.</p><form id="refDefaultsForm" class="stack-form"><label class="quest-launch"><input id="refDefaultEnabled" type="checkbox" checked> Разрешить создание личных кодов</label><label>Бонус первого пополнения, %<input id="refDefaultPercent" type="number" min="0" max="100" step="0.1" value="10"></label><label>Бесплатных прокрутов<input id="refDefaultCount" type="number" min="0" max="20" value="1"></label><label>Шанс бесплатного прокрута, %<input id="refDefaultChance" type="number" min="1" max="70" value="10"></label><label>Предмет<select id="refDefaultTier"><option value="random">Шляпа волшебника</option><option value="onyx">Шляпа на ониксе</option><option value="black">Шляпа на блэке</option></select></label><button id="refDefaultsSave" class="primary" type="submit">Сохранить настройки</button></form></div>
+      <div class="adm-box"><h3>Создать промокод</h3>
+        <input id="admPromoKind" type="hidden" value="balance">
+        <input id="admPromoCode" class="gp-search" placeholder="Код (пусто = случайный)" maxlength="32">
+        <input id="admPromoLimit" class="gp-search" type="number" min="1" value="1" placeholder="Количество активаций">
+        <label>Привязать к блогеру / игроку<input id="admPromoOwner" class="gp-search" placeholder="Telegram ID, @ник или ключ игрока (необязательно)"></label>
+        <h4>Награды</h4><p class="muted">Добавьте одну или несколько наград. Оформления включают свои фоны, музыку и особенности.</p>
+        <select id="admPromoRewardKind" class="gp-search" aria-label="Вид награды"><option value="balance">Баланс TON</option><option value="hatcoin">HatCoin</option><option value="gift">Подарок</option><option value="item">Оружие / прокрут / оформление</option><option value="deposit_bonus">Бонус первого пополнения</option><option value="free_spin">Бесплатный прокрут</option></select>
+        <input id="admPromoAmount" class="gp-search" type="number" step="0.01" min="0.01" placeholder="Сумма награды" aria-label="Сумма награды">
+        <div id="admPromoDepositField" hidden><label>Бонус пополнения, %<input id="admPromoDepositPercent" class="gp-search" type="number" min="0.1" max="100" step="0.1" value="10"></label><p class="muted">Один раз, только после подтверждённого платежа. Подарки не участвуют.</p></div>
+        <div id="admPromoFreeField" hidden><label>Предмет<select id="admPromoFreeTier"><option value="random">Шляпа волшебника</option><option value="onyx">Шляпа на ониксе</option><option value="black">Шляпа на блэке</option><option value="gift">Подарок из каталога</option></select></label><label>Шанс, %<input id="admPromoFreeChance" type="number" min="1" max="70" value="10"></label><label>Количество<input id="admPromoFreeCount" type="number" min="1" max="100" value="1"></label></div>
+        <select id="admPromoItem" class="gp-search" hidden=""></select>
+        <div id="admPromoGiftField" hidden=""><button type="button" id="admPromoChoose">Выбрать подарок из каталога</button><p id="admPromoSelected" class="muted">Подарок не выбран</p></div>
+        <button type="button" id="admPromoAddReward">+ Добавить награду</button><div id="admPromoRewards"></div>
+        <h4>Условия активации</h4><p class="muted">Все добавленные условия должны выполняться одновременно. Без условий код доступен всем. Периоды пополнений отсчитываются назад от момента активации; учитываются подтверждённые платежи.</p>
+        <div id="admPromoConditions"></div><button type="button" id="admPromoAddCondition">+ Добавить условие</button>
+        <div class="adm-form"><button type="button" id="admPromoCreate">Создать промокод</button><button type="button" id="admPromoCancelEdit" hidden>Отменить редактирование</button></div>
+      </div><h3>Все промокоды</h3><div id="admPromoRows" class="lv-list"></div>
+    </div>
+    <div id="admWithdrawals" hidden="">
+      <div class="adm-wd-switch" id="admWdTabs">
+        <button type="button" data-wd="active" class="on">Активные</button>
+        <button type="button" data-wd="completed">Завершённые</button>
+      </div>
+      <div class="adm-wd-toolbar">
+        <button type="button" id="admWdReload">↻ Обновить</button>
+        <button type="button" id="admWdBotOpen">↗ Открыть бота</button>
+        <button type="button" id="admWdBotSetup">Настроить webhook</button>
+      </div>
+      <p class="muted" id="admWdBotStatus">Уведомления Telegram: проверка…</p>
+      <div id="admWdList"></div>
+    </div>
+    <div id="admAppearance" hidden="">
+      <div class="adm-box maint-admin-box">
+        <h3>🛠 Режим технических работ</h3>
+        <label class="halloween-switch-row" for="admMaintToggle">
+          <span class="halloween-switch-copy">
+            <b>Закрыть игру для игроков</b>
+            <small id="admMaintStatus" role="status">Загрузка…</small>
+          </span>
+          <input id="admMaintToggle" type="checkbox" role="switch" aria-label="Включить режим технических работ">
+          <span class="halloween-switch-track" aria-hidden="true"><span></span></span>
+        </label>
+        <p class="muted">Пока режим включён, пользоваться игрой могут только администраторы. Остальные видят экран технических работ в оформлении своей темы.</p>
+        <textarea id="admMaintText" maxlength="300" rows="3" placeholder="Текст для игроков (необязательно): «Обновляем игру, вернёмся через 15 минут»"></textarea>
+        <div class="adm-form"><button type="button" class="primary" id="admMaintSave">Сохранить текст</button></div>
+      </div>
+      <div class="adm-box halloween-admin-box">
+        <h3>🎃 Управление ивентом</h3>
+        <div class="stack-form">
+          <label>Ивент<select id="admEventId"><option value="halloween">Хэллоуин</option></select></label>
+          <label>Длительность, часов (0 — до ручного завершения)<input id="admEventDuration" type="number" min="0" max="8760" step="any" value="0"></label>
+          <p class="muted">Отсчёт идёт с момента запуска. При изменении длительности уже запущенного ивента время считается от его первоначального старта.</p>
+          <p id="admEventDeadline" role="status"></p>
+          <b>Снаряжение на время ивента</b>
+          <div id="admEventEquipment" class="event-equipment"></div>
+          <p class="muted">По умолчанию — рука скелета. Выбранные предметы доступны всем до завершения ивента. Предметы, отдельно полученные за покупку, уровень, квест, достижение или промокод, остаются навсегда.</p>
+          <p id="admEventCounts" role="status"></p>
+          <div class="adm-form"><button id="admEventQuests" type="button">Квесты и достижения</button><button id="admEventShop" type="button">Лоты магазина</button></div>
+          <p class="muted">Привяжите задания и лоты к ивенту в их формах. Можно задать им более короткий срок. При завершении ивента они удаляются вместе с прогрессом заданий; выданные награды сохраняются.</p>
+          <div class="adm-form"><button id="admEventSave" class="primary" type="button">Сохранить настройки</button><button id="admEventFinish" class="danger" type="button">Завершить ивент</button></div>
+        </div>
+
+        <label class="halloween-switch-row" for="admHalloweenToggle">
+          <span class="halloween-switch-copy">
+            <b>Ивент активен</b>
+            <small id="admHalloweenStatus" role="status">Загрузка…</small>
+          </span>
+          <input id="admHalloweenToggle" type="checkbox" role="switch" aria-label="Запустить или завершить ивент">
+          <span class="halloween-switch-track" aria-hidden="true"><span></span></span>
+        </label>
+      </div>
+    </div>
+    <div id="admTonConnect" hidden="">
+      <div class="adm-box">
+        <h3>TON Connect · настройки приложения и пополнений</h3>
+        <p class="tc-info" id="tcStatus">Загружаем текущие настройки…</p>
+        <label class="tc-label" for="tcRecipient">Кошелёк получателя TON</label>
+        <input class="tc-input" id="tcRecipient" placeholder="UQ… / EQ… / 0:…" autocomplete="off" spellcheck="false"/>
+        <label class="tc-label" for="tcAppName">Название приложения</label>
+        <input class="tc-input" id="tcAppName" maxlength="64" placeholder="Magic Upgrade"/>
+        <label class="tc-label" for="tcAppUrl">Адрес сайта (HTTPS)</label>
+        <input class="tc-input" id="tcAppUrl" placeholder="https://example.com" inputmode="url"/>
+        <label class="tc-label" for="tcIconUrl">Адрес логотипа (PNG или ICO, HTTPS)</label>
+        <input class="tc-input" id="tcIconUrl" placeholder="https://example.com/images/hat.png" inputmode="url"/>
+        <img id="tcIconPreview" alt="Логотип TON Connect" src="images/hat.png"/>
+        <label class="tc-label" for="tcTerms">Ссылка на условия использования (необязательно)</label>
+        <input class="tc-input" id="tcTerms" placeholder="https://example.com/terms" inputmode="url"/>
+        <label class="tc-label" for="tcPrivacy">Ссылка на политику конфиденциальности (необязательно)</label>
+        <input class="tc-input" id="tcPrivacy" placeholder="https://example.com/privacy" inputmode="url"/>
+
+        <div class="tc-actions">
+          <button id="tcSave" type="button">Сохранить</button>
+          <button id="tcReset" type="button">Сбросить к исходным</button>
+          <button id="tcManifest" type="button">Открыть manifest</button>
+          <button id="tcReload" type="button">Обновить настройки</button>
+        </div>
+      </div>
+    </div>

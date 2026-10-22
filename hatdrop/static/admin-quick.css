@@ -1,0 +1,43 @@
+/* "Быстрое управление" panel on the Overview tab */
+.quick-panel { margin-bottom:16px !important; }
+.quick-panel h2 { margin:0 0 12px; font-size:16px; }
+.quick-grid { display:grid; grid-template-columns:repeat(2, minmax(0, 1fr)); gap:12px; }
+.quick-card { border:1px solid var(--line); border-radius:12px; padding:12px 14px; background:#0f1726; display:flex; flex-direction:column; gap:8px; min-width:0; }
+.quick-card h3 { margin:0; font-size:13px; display:flex; align-items:center; justify-content:space-between; gap:8px; }
+.quick-card h3 small { font-weight:400; color:var(--muted); font-size:11px; }
+.quick-card .button { margin:0; align-self:flex-start; }
+.quick-card input { width:100%; min-height:34px; padding:6px 10px; border-radius:8px; border:1px solid #344157; background:#0b1220; color:inherit; }
+.quick-wide { grid-column:1 / -1; }
+.quick-state { margin:0; font-size:12px; color:var(--muted); }
+.quick-card[data-on="true"] .quick-state { color:var(--green); }
+#quickMaint[data-on="true"] { border-color:#7a3b45; background:#1d1218; }
+#quickMaint[data-on="true"] .quick-state { color:var(--red); }
+.quick-chips { display:flex; flex-wrap:wrap; gap:8px; }
+.quick-chip { min-height:34px; padding:6px 12px; border-radius:999px; border:1px solid #4a3040; background:#2a1820; color:#ffb3bf; font-size:12px; }
+.quick-chip.on { border-color:#2f6b58; background:#12352b; color:#8ff0cf; }
+.quick-chip:disabled { opacity:.6; }
+.quick-link { border:0; background:none; color:#8fa6ff; font-size:11px; padding:0; min-height:0; cursor:pointer; }
+.quick-log { list-style:none; margin:0; padding:0; display:flex; flex-direction:column; gap:6px; max-height:320px; overflow:auto; }
+.quick-log li { display:grid; grid-template-columns:96px auto 1fr; gap:10px; font-size:12px; align-items:baseline; padding:6px 0; border-top:1px solid #1c2638; }
+.quick-log li:first-child { border-top:0; }
+.quick-log time { color:var(--muted); font-size:11px; }
+.quick-log b { white-space:nowrap; }
+.quick-log span { color:#d5dff0; overflow-wrap:anywhere; }
+.quick-log .quick-muted { display:block; color:var(--muted); }
+@media (max-width:640px) {
+  .quick-grid { grid-template-columns:1fr; }
+  .quick-log li { grid-template-columns:1fr; gap:2px; }
+}
+
+/* ---------- phones: keep the header and the menu below the clock / notch / Telegram buttons ---------- */
+:root {
+  --safe-top: max(env(safe-area-inset-top, 0px), var(--app-inset-top, 0px));
+  --safe-bottom: max(env(safe-area-inset-bottom, 0px), var(--app-inset-bottom, 0px));
+}
+.topbar { box-sizing:border-box; height:auto !important; min-height:calc(72px + var(--safe-top)); padding-top:var(--safe-top) !important; }
+.sidebar { padding-top:calc(26px + var(--safe-top)) !important; padding-bottom:calc(18px + var(--safe-bottom)) !important; }
+.toast { bottom:calc(24px + var(--safe-bottom)) !important; }
+.access-gate { padding-top:calc(24px + var(--safe-top)) !important; }
+@media (max-width:800px) { .topbar { min-height:calc(62px + var(--safe-top)); } }
+.ud-tabs { top:calc(8px + var(--safe-top)) !important; }
+.gs-overlay { padding-top:calc(9vh + var(--safe-top)) !important; }

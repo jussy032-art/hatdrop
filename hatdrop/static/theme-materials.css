@@ -1,0 +1,28 @@
+html[data-theme]{--surface-texture:url('/static/materials/oak.svg');--material-glint:#dfb879;--wheel-material:url(#wheelOak)}
+html[data-halloween="on"]{--surface-texture:url('/static/materials/granite.svg');--material-glint:#c4b1a0;--wheel-material:url(#wheelGranite)}
+html[data-basement="on"]{--surface-texture:url('/static/materials/brushed-metal.svg');--material-glint:#d3bc87;--wheel-material:url(#wheelCopper)}
+html[data-theme] :is(.modal-card,.player-card-metrics>div,.stat-card,.shop-card,.menu-card.menu-wide){background-image:var(--surface-texture);background-size:128px 128px;box-shadow:inset 1px 1px 0 #ffffff20,inset -2px -2px 0 #0005,0 3px 0 #0005}
+html[data-theme] .player-card-metrics>div{border:3px solid var(--game-edge);outline:1px solid var(--game-line);outline-offset:-5px;padding:14px 8px;background-color:var(--game-panel);gap:10px}
+html[data-theme] .player-card-metrics small{color:var(--material-glint)}
+html[data-theme] :is(.cta,.ghost,.view-back,.cx-chip,.amt,.wd-btn,.ref-copy,.dep-wallet-btn){background-image:var(--surface-texture);background-size:128px 128px;border:3px solid var(--game-edge);box-shadow:inset 1px 1px 0 #fff5,inset -2px -3px 0 #0005,0 3px 0 #0007;color:var(--game-ink);text-shadow:1px 1px #0008}
+html[data-theme] :is(.cta,.ghost,.view-back,.cx-chip,.amt,.wd-btn,.ref-copy,.dep-wallet-btn):active{box-shadow:inset 1px 2px 0 #0005;translate:0 1px}
+html[data-theme] .player-card h3{padding:10px;background:var(--surface-texture) var(--game-inset);border-left:3px solid var(--game-line);margin:14px 0 2px}
+html[data-theme] #wheel .theme-wheel-material{display:block;stroke:var(--wheel-material);stroke-opacity:.95;filter:drop-shadow(0 1px 0 #19140f)}
+html[data-theme] #wheel .ring-base{stroke:var(--material-glint)!important;stroke-width:1!important;stroke-opacity:.65!important}
+html[data-theme] #wheel .ring-arc{stroke-opacity:.92!important}
+html[data-theme] :is(.weapon-card img,#weaponBtn img,#pointer>image){filter:brightness(1.1) saturate(1.16) drop-shadow(0 1px 0 #201510)}
+html[data-halloween="on"] #pointer>image{filter:brightness(1.12) saturate(1.12) drop-shadow(0 0 1px #b2683c)}
+html[data-basement="on"] #pointer>image{filter:brightness(1.14) saturate(1.15) drop-shadow(0 0 1px #8bb5a4)}
+html[data-theme] .player-card-drop img{filter:none}
+html[data-theme] .player-card-mode{padding:11px 2px;border-bottom-color:var(--game-line)}
+html[data-theme][data-sky] :is(.cta,.ghost,.view-back,.cx-chip,.amt,.wd-btn,.ref-copy,.dep-wallet-btn){background-image:var(--surface-texture)!important;background-size:128px 128px!important;border-top-color:var(--material-glint);border-left-color:var(--game-line)}
+html[data-theme] #wheel .theme-wheel-material{r:133px;stroke-width:6px}
+html[data-theme][data-sky] #view-upgrade :is(#spinBtn,#weaponBtn,#skyBtn,#fastBtn:not([aria-pressed="true"])){background-color:var(--game-accent)!important;background-image:var(--surface-texture)!important;background-size:128px 128px!important;border:3px solid var(--game-edge)!important;border-top-color:var(--material-glint)!important;box-shadow:inset 2px 2px 0 var(--game-accent-light),inset -2px -3px 0 var(--game-accent-dark),0 4px 0 var(--game-shadow)!important;color:#241b11!important}
+
+html[data-theme]{--surface-panel:url('/static/materials/oak-panel.png')}
+html[data-halloween="on"]{--surface-panel:url('/static/materials/granite-panel.png')}
+html[data-basement="on"]{--surface-panel:url('/static/materials/metal-panel.png')}
+html[data-theme] :is(.player-card-metrics>div,.stat-card,.shop-card,.shop-package,#refOwnCodeBox){background-color:var(--game-panel,#2e251b)!important;background-image:linear-gradient(#0003,#0003),var(--surface-panel)!important;background-size:100% 100%!important;border:3px solid var(--game-edge)!important;outline:0!important;border-radius:0!important;color:var(--game-ink)!important;box-shadow:inset 0 0 0 1px var(--game-line),0 3px 0 #0008!important}
+html[data-theme] .shop-card{padding:16px 12px;min-height:150px}
+html[data-theme] .shop-card:focus-visible{outline:2px solid var(--game-ink)!important;outline-offset:3px!important}
+html[data-theme] #refCodeCopy,html[data-theme] #refCodeRename{font:inherit;padding:12px;cursor:pointer}

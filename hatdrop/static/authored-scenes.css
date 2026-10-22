@@ -1,0 +1,13 @@
+.ms-world>.ms-img.day,#basementWorld>.basement-lit{opacity:1!important;transition:none!important;image-rendering:auto!important}
+.halloween-fx,.halloween-attached-effects,.scene-svg-details,.basement-atmosphere,.basement-light-details{display:none!important}
+html[data-halloween="on"] #halloweenNightPng[data-loaded="true"]{opacity:1!important;transition:none!important;image-rendering:auto!important}
+.upgrade-prize{display:none!important}
+html[data-halloween="on"] .bg-wide .halloween-scene{display:none!important}
+html[data-halloween="on"] #halloweenNightPng{filter:none!important}
+#meadowScene,#basementScene,.halloween-scene-png{visibility:hidden!important}
+#authoredBackdrop{position:absolute;inset:0;overflow:hidden;pointer-events:none;z-index:1;background:#151c26}
+.authored-frame{position:absolute;display:block;max-width:none;object-fit:fill;will-change:opacity;image-rendering:auto}
+.authored-frame[data-scene="meadow"]{left:var(--ms-rest-x,0px);top:var(--ms-top,0px);width:var(--ms-w,100%);height:var(--ms-h,100%)}
+.authored-frame[data-scene="halloween"]{left:var(--hw-scene-x,0px);top:var(--hw-scene-y,0px);width:var(--hw-scene-w,100%);height:var(--hw-scene-h,100%)}
+.authored-frame[data-scene="basement"]{left:var(--bs-scene-x,0px);top:var(--bs-scene-y,0px);width:var(--bs-scene-w,100%);height:var(--bs-scene-h,100%)}
+.scene-glitch{animation:sceneGlitch .38s steps(1,end) both}@keyframes sceneGlitch{0%,100%{filter:none;clip-path:none}15%{filter:hue-rotate(35deg) contrast(1.35);clip-path:inset(1% 0 0)}30%{filter:hue-rotate(-25deg);clip-path:inset(0 0 2%)}48%{filter:contrast(1.5);clip-path:none}65%{filter:hue-rotate(15deg)}85%{filter:none}}@media(prefers-reduced-motion:reduce){.scene-glitch{animation:none}}

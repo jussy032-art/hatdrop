@@ -1,0 +1,17 @@
+#optimizationModal {z-index:500;}
+#optimizationModal[hidden] {display:none!important;}
+.optimization-card {max-width:390px;text-align:left;}
+.optimization-card h2 {font-size:15px;line-height:1.7;text-align:center;}
+.optimization-card p,.optimization-note {font-size:10px;line-height:1.8;}
+.optimization-card .lang-row {display:flex;flex-direction:row;align-items:center;justify-content:space-between;gap:16px;margin:18px 0;}
+.settings-modal .performance-setting {display:flex;flex-direction:row;align-items:center;justify-content:space-between;gap:16px;min-height:52px;}
+.performance-setting .pixel-switch-input,#optimizationModal .pixel-switch-input {position:absolute;inset:0;width:100%;height:100%;opacity:0;margin:0;z-index:2;cursor:pointer;}
+.optimization-note {opacity:.8;margin:0 0 14px;}
+html[data-optimized="on"] :is(.ms-fx,.scene-svg-details,.wheel-glow,.wheel-glass,#ptrTrail) {display:none!important;}
+html[data-optimized="on"] .halloween-attached-effects :is(.gh,.bat,.hw-local-light) {display:none!important;}
+html[data-optimized="on"] .halloween-attached-effects * {animation:none!important;}
+html[data-optimized="on"] #centerHat {animation:none!important;filter:none!important;}
+html[data-optimized="on"] :is(.modal,.modal-card,.view) {animation:none!important;transition:none!important;backdrop-filter:none!important;}
+html[data-optimized="on"] #wheelScale text.on {filter:none!important;}
+html[data-optimized="on"] .halloween-scene-png {transition:none!important;}
+html[data-optimized="on"].hw-dusk .bg-wide::before {animation:none!important;opacity:0!important;}

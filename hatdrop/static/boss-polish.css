@@ -1,0 +1,110 @@
+/* Copper, old oak and candlelight. Shared controls, no game logic changes. */
+html[data-theme][data-sky] :is(.cta,.ghost,.tour-btn,.kostyan-quest-action,.theme-buy,.theme-apply,.wp-apply) {
+  --button-top:#ffd17b; --button-face:#ee982f; --button-bottom:#b45c21;
+  position:relative; box-sizing:border-box; min-height:46px; padding:13px 18px;
+  border:2px solid #29150f; border-radius:5px;
+  background:linear-gradient(90deg,#fff0bd55,transparent 12% 88%,#81351333),linear-gradient(var(--button-top) 0 7%,var(--button-face) 7% 76%,var(--button-bottom) 76%);
+  box-shadow:inset 0 0 0 1px #ffdb8e,inset 0 3px 0 #fff1b888,inset 0 -3px 0 #76361f,0 3px 0 #100b14,0 4px 0 #b57c3c55;
+  color:#30180f; font-family:"Press Start 2P",monospace; font-size:10px; line-height:1.6;
+  text-shadow:0 1px #ffe3a7; cursor:pointer;
+  transition:filter .15s,translate .12s,box-shadow .12s;
+}
+html[data-theme][data-sky] .ghost {
+  background:linear-gradient(90deg,#9c60351f,transparent 20% 80%,#0e081133),linear-gradient(#49313a 0 8%,#2b1b2d 8% 78%,#1c1421 78%);
+  border-color:#28130e; color:#f4ce8e; text-shadow:0 2px #110b15;
+  box-shadow:inset 0 0 0 1px #aa713e,inset 0 3px 0 #d4a76533,inset 0 -3px 0 #120d19,0 3px 0 #0c0810;
+}
+@media(hover:hover) {
+  html[data-theme][data-sky] :is(.cta,.ghost,.tour-btn,.kostyan-quest-action,.theme-buy,.theme-apply,.wp-apply):hover:not(:disabled) { filter:brightness(1.12); }
+}
+html[data-theme][data-sky] :is(.cta,.ghost,.tour-btn,.kostyan-quest-action,.theme-buy,.theme-apply,.wp-apply):active:not(:disabled) { translate:0 2px; filter:brightness(.96); }
+html[data-theme][data-sky] :is(button,[role="button"]):focus-visible { outline:2px solid #fff0ba; outline-offset:4px; }
+html[data-theme][data-sky] :is(.cta,.ghost,.tour-btn,.kostyan-quest-action,.theme-buy,.theme-apply,.wp-apply):disabled { filter:grayscale(.65); opacity:.5; cursor:not-allowed; }
+
+/* A small diorama, shared by the entrance and reward scenes. */
+.pb-modal .modal-card {
+  border:2px solid #a66b37; border-radius:8px; padding:18px;
+  background:radial-gradient(ellipse at 50% 0,#57313b55,transparent 65%),#19111f;
+  box-shadow:inset 0 0 0 3px #291a24,inset 0 0 0 4px #c78c4133,0 16px 70px #000b;
+}
+.pb-modal .pb-scene {
+  height:222px; flex-shrink:0; border:1px solid #815536; border-radius:4px;
+  background:radial-gradient(ellipse at 50% 88%,#e98e2440,transparent 47%),linear-gradient(#0d1323,#212137 72%,#17121d 72%);
+  box-shadow:inset 0 0 30px #070a16,0 2px #07080e;
+}
+.pb-modal .pb-scene::before {
+  content:""; position:absolute; inset:0; opacity:.4;
+  background:linear-gradient(90deg,transparent 9%,#090c18 9% 11%,transparent 11% 87%,#090c18 87% 89%,transparent 89%),repeating-linear-gradient(90deg,transparent 0 29px,#090c18 29px 32px,transparent 32px 48px);
+  clip-path:polygon(0 50%,20% 64%,35% 54%,55% 66%,75% 50%,100% 60%,100% 100%,0 100%);
+}
+.pb-modal .pb-scene::after { height:22%; background:linear-gradient(#4d3440 0 3px,#1b1c27 3px 7px,#12141d 7px); box-shadow:0 -6px 22px #eb9b2420; }
+.pb-modal .pb-scene .pb-big { width:132px; height:174px; margin-left:-66px; bottom:calc(22% - 12px); filter:drop-shadow(0 5px 0 #06080c77) drop-shadow(0 0 10px #f3a54822); }
+.pb-modal .pb-moon { width:40px; height:40px; right:16%; top:22px; background:#dac8a1; box-shadow:inset -9px -5px #8d8994,0 0 30px #d8d7c325; }
+.pb-modal .pb-dirt { bottom:22%; }
+.pb-modal h2 { color:#ffd086; font-size:12px; }
+.pb-modal .pb-countdown { display:flex; justify-content:center; gap:10px; align-items:center; color:#b9a9b4; font-size:8px; }
+.pb-modal .pb-countdown b { padding:7px 10px; background:#100d18; border:1px solid #725037; border-radius:3px; color:#ffe2a0; font-variant-numeric:tabular-nums; }
+.pb-modal .pb-rules { background:#100d18; padding:12px 14px; box-shadow:inset 0 0 0 1px #73503966; color:#d1c4cb; }
+.pb-modal .pb-rules li { font-size:8px; line-height:1.9; }
+.pb-modal .pb-rules li::marker { color:#e8a34d; }
+.pb-modal .pb-award { border:1px solid #94653c; background:radial-gradient(ellipse at 50% 26%,#7d492c44,transparent 75%),#211626; box-shadow:inset 0 0 0 2px #110e1a,0 3px #0c0912; }
+.pb-modal .pb-award img { filter:drop-shadow(0 4px 0 #0005) drop-shadow(0 0 9px #ffb84d33); }
+.pb-modal .pb-actions .cta { width:100%; }
+.pb-skel .pb-eye { filter:drop-shadow(0 0 2px #ff9a2a); }
+.pb-mantle,.pb-scythe { transform-origin:38px 40px; }
+#pbHud .pb-bar { border-color:#3a241c; border-radius:3px; box-shadow:inset 0 0 0 2px #bd884e,inset 0 0 0 3px #392020,0 3px #070b13; }
+#pbHud .pb-fill { background:repeating-linear-gradient(90deg,transparent 0 14px,#1d131f66 14px 16px),linear-gradient(#f5aa79 0 18%,#bf5348 18% 65%,#793640 65%); box-shadow:inset 0 1px #ffe0ab; }
+#pbHud.low .pb-fill { background:repeating-linear-gradient(90deg,transparent 0 14px,#1d131f66 14px 16px),linear-gradient(#ffb77b 0 18%,#ef623b 18% 65%,#9a302b 65%); }
+#pbHud .pb-info { width:28px; height:28px; bottom:0; border:2px solid #2d1b17; background:linear-gradient(#ffd286 0 12%,#d89648 12% 75%,#8d4a2b 75%); color:#301b17; box-shadow:inset 0 0 0 1px #ffdc9a,0 2px #090b12; }
+#pbHud .pb-body { filter:drop-shadow(0 0 6px #e99a3222); }
+#pbHud.dying :is(.pb-mantle,.pb-scythe) { animation:pbRobeFall 1s .4s ease-in forwards; }
+.pb-win :is(.pb-mantle,.pb-scythe) { animation:pbRobeFall 1s .5s ease-in forwards; }
+@keyframes pbRobeFall { to { transform:translateY(55px) rotate(12deg); opacity:0; } }
+.boss-card { border:2px solid #9e6b3c; border-radius:6px; background:radial-gradient(ellipse at top,#4a2b3a55,transparent),#1a1221; box-shadow:inset 0 0 0 3px #2e1e2b,0 4px #0b0a12; }
+.boss-art { border:1px solid #93643e; border-radius:4px; background:radial-gradient(ellipse at 50% 70%,#a7672c33,transparent 65%),#111523; }
+.boss-card progress { height:21px; border:2px solid #bc874a; border-radius:3px; }
+.boss-card progress::-webkit-progress-value { background:repeating-linear-gradient(90deg,transparent 0 18px,#200e1f55 18px 20px),linear-gradient(#eeae77 0 15%,#bb5149 15% 75%,#74343e 75%); }
+@media(max-width:380px) { .pb-modal .modal-card{padding:12px;gap:10px}.pb-modal .pb-scene{height:190px}.pb-modal .pb-scene .pb-big{width:116px;height:153px;margin-left:-58px}.pb-modal h2{font-size:11px} }
+@media(prefers-reduced-motion:reduce) { html[data-theme][data-sky] :is(.cta,.ghost,.tour-btn,.kostyan-quest-action,.theme-buy,.theme-apply,.wp-apply){transition:none}.pb-mantle,.pb-scythe{animation:none!important} }
+
+/* Monocraft: Minecraft-inspired pixel lettering, served locally (SIL OFL). */
+@font-face {
+  font-family:"Monocraft";
+  src:url('/static/fonts/Monocraft.ttf') format('truetype');
+  font-style:normal; font-weight:400; font-display:swap;
+}
+@font-face { font-family:"Monocraft"; src:url("/static/fonts/Monocraft-Bold.ttf") format("truetype"); font-style:normal; font-weight:700; font-display:swap; }
+:root { --boss-ui-font:"Monocraft","Press Start 2P",monospace; }
+@font-face { font-family:"Monocraft"; src:url('/static/fonts/Monocraft-Black.ttf') format('truetype'); font-style:normal; font-weight:900; font-display:swap; }
+html[data-theme][data-sky] :is(.cta,.ghost,.tour-btn,.kostyan-quest-action,.theme-buy,.theme-apply,.wp-apply),
+.pb-modal .pb-actions button {
+  font-family:var(--boss-ui-font)!important;
+  font-size:16px!important; font-weight:900!important;
+  line-height:1.5!important; letter-spacing:0!important;
+  text-shadow:0 1px 0 #ffe5aa66;
+}
+#pbHud,#pbHud *,#pbChip,#pbChip *,
+.pb-modal,.pb-modal :is(h2,p,li,b,span,small,button) {
+  font-family:var(--boss-ui-font)!important;
+  font-weight:700!important; font-synthesis:none; font-variant-ligatures:none;
+  letter-spacing:0;
+}
+.pb-modal h2 { font-size:20px!important; line-height:1.5; font-weight:700!important; color:#ffda9c; text-shadow:2px 2px 0 #080b14; }
+.pb-modal p,.pb-modal li { font-size:14px!important; line-height:1.6; font-weight:700!important; }
+.pb-modal .pb-rules li { font-size:14px!important; line-height:1.6; }
+.pb-modal .pb-rules ul { gap:8px; }
+.pb-modal .pb-countdown { font-size:12px!important; }
+.pb-modal .pb-countdown b { font-size:14px; font-weight:700!important; }
+.pb-modal .pb-award span { font-size:12px; line-height:1.5; font-weight:700!important; }
+.pb-modal .pb-award small { font-size:12px; font-weight:700!important; }
+#pbHud .pb-row { font-size:12px; line-height:1.25; }
+#pbHud .pb-title,#pbHud .pb-timer { font-weight:700!important; }
+#pbHud .pb-hp { font-size:12px; font-weight:700!important; }
+#pbHud .pb-reward { font-size:11px; line-height:1.3; }
+#pbHud .pb-info { font-size:16px; font-weight:700!important; }
+#pbChip { font-size:12px; }
+@media(max-width:380px) {
+  .pb-modal h2 { font-size:18px!important; }
+  #pbHud .pb-row { font-size:10px; }
+  html[data-theme][data-sky] :is(.cta,.ghost) { font-size:14px!important; }
+}

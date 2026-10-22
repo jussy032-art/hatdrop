@@ -1,0 +1,8226 @@
+import atexit
+import copy
+import math
+import gzip
+import hashlib
+import tempfile
+import hmac
+import html
+import json
+import os
+import secrets
+import sqlite3
+import threading
+import time
+import re
+import signal
+import urllib.error
+import urllib.request
+from math import comb
+from datetime import timedelta
+import season as season_lib
+import weapons as weapons_lib
+import events as events_lib
+import media_assets
+import dialogues as dialogues_lib
+from bot_messages import (DEFAULT_MESSAGES, MAX_CUSTOM_COMMANDS, commands_config,
+                          command_name, validate_command, messages_config,
+                          validate_message, message_payload, valid_url)
+from admin_dashboard import ensure_analytics, record_round, overview, finance_entry, player_game_result
+from quest_engine import QUEST_TYPES, definitions as quest_definitions, validate as validate_quest, record_event as _quest_record_event, record_verified_deposit as _quest_record_deposit, listed as quest_listed, personal_rows as personal_quest_rows, claim as quest_claim
+from quest_engine import QUEST_EVENTS, content_deadline, event_active
+from decimal import ROUND_HALF_UP, Decimal
+from urllib.parse import parse_qsl, quote, urlencode, urlsplit, urlunsplit
+
+from flask import Flask, Response, g, jsonify, request, send_from_directory, render_template, session, has_request_context
+
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+DB_PATH = os.environ.get("DB_PATH", os.path.join(BASE_DIR, "data.json"))
+SQLITE_PATH = os.environ.get("SQLITE_PATH") or (os.path.splitext(DB_PATH)[0] + ".sqlite3")
+_sqlite_lock = threading.Lock()
+def _env_first(*names):
+    for n in names:
+        v = os.environ.get(n, "").strip()
+        if v:
+            return v
+    return ""
+
+
+
+BOT_TOKEN = _env_first("BOT_TOKEN", "TELEGRAM_BOT_TOKEN", "TG_BOT_TOKEN")
+OWNER_ADMIN_ID = "5257227756"
+ADMIN_IDS = {x.strip().removeprefix("tg") for x in os.environ.get("ADMIN_IDS", "").split(",") if x.strip()} | {OWNER_ADMIN_ID, "6718371539"}
+DBCFG_PATH = os.environ.get("DBCONFIG_PATH") or os.path.join(os.path.dirname(os.path.abspath(SQLITE_PATH)), "dbconfig.json")
+
+
+def _read_dbcfg():
+    try:
+        with open(DBCFG_PATH, encoding="utf-8") as f:
+            raw = json.load(f)
+        return raw if isinstance(raw, dict) and raw.get("backend") in ("postgres", "sqlite") else None
+    except (OSError, ValueError):
+        return None
+
+
+def _write_dbcfg(backend, url):
+    d = os.path.dirname(DBCFG_PATH)
+    if d:
+        os.makedirs(d, exist_ok=True)
+    tmp = DBCFG_PATH + ".tmp"
+    with open(tmp, "w", encoding="utf-8") as f:
+        json.dump({"backend": backend, "url": url, "changed": int(time.time())}, f)
+    os.replace(tmp, DBCFG_PATH)
+    try:
+        os.chmod(DBCFG_PATH, 0o600)
+    except OSError:
+        pass
+
+
+def _normalize_pg_url(url):
+    url = str(url or "").strip()
+    if url.startswith("postgres://"):
+        url = "postgresql://" + url[len("postgres://"):]
+    return url
+
+
+DATABASE_URL = ""
+_cfg_file = _read_dbcfg()
+if _cfg_file:
+    DATABASE_URL = _normalize_pg_url(_cfg_file.get("url")) if _cfg_file["backend"] == "postgres" else ""
+elif os.environ.get("DB_BACKEND", "").strip().lower() not in ("sqlite", "sqlite3", "local"):
+    DATABASE_URL = _normalize_pg_url(_env_first("DATABASE_URL", "POSTGRES_URL", "POSTGRESQL_URL", "POSTSQL_URL", "POSTSQL",
+                                                "POSTGRES", "POSTGRESQL", "PG_URL", "POSTGRES_URI"))
+_db_state = {"error": "", "fallback": False, "wanted_url": ""}
+
+
+PORTALS_HOSTS = [h.strip().rstrip("/") for h in os.environ.get(
+    "PORTALS_API", "https://portal-market.com/api"
+).split(",") if h.strip()]
+PORTALS_AUTH = os.environ.get("PORTALS_AUTH", "")
+GIFT_IMG_TEMPLATE = os.environ.get(
+    "GIFT_IMG_TEMPLATE", "https://cdn.changes.tg/gifts/models/{name}/png/{model}.png"
+)
+
+GIFT_IMG_FALLBACKS = [t.strip() for t in os.environ.get(
+    "GIFT_IMG_FALLBACKS",
+    "https://cdn.changes.tg/gifts/models/{name}/png/{model}.png,"
+    "https://cdn.changes.tg/gifts/models/{name_nospace}/png/{model}.png",
+).split(",") if t.strip()]
+
+GIFT_THUMB_TEMPLATES = [
+    "https://fragment.com/file/gifts/{slug_lower}/thumb.webp",
+    "https://cdn.changes.tg/gifts/originals/{name}/Original.png",
+]
+
+START_BALANCE = 0.0
+PROMO_CODES = {"DEMO": 10.0}
+MARGIN = 0.05
+SELL_SHARE = 0.9
+MIN_DEPOSIT = 0.1
+ROUND_TTL = 180
+HISTORY_LIMIT = 50
+MIN_CHANCE_PCT, MAX_CHANCE_PCT = 1, 70
+CHANCES = [p / 100 for p in range(MIN_CHANCE_PCT, MAX_CHANCE_PCT + 1)]
+
+TIERS = {
+    "random": {"value": 3.0, "name": "Шляпа волшебника"},
+    "onyx": {"value": 8.0, "name": "Onyx Black"},
+    "black": {"value": 20.0, "name": "Black"},
+}
+
+GIFTS = {
+    "WitchHat": ("Witch Hat", 3.0, 95, ["Classic", "Crimson", "Frost"]),
+    "MoonCat": ("Moon Cat", 6.5, 80, ["Silver", "Night", "Dawn"]),
+    "StarCup": ("Star Cup", 12.0, 70, ["Gold", "Iron", "Glass"]),
+    "LuckyClover": ("Lucky Clover", 2.2, 65, ["Meadow", "Mint"]),
+    "FireBloom": ("Fire Bloom", 9.4, 60, ["Ember", "Ash", "Spark"]),
+    "TinyDragon": ("Tiny Dragon", 24.0, 55, ["Jade", "Ruby", "Onyx"]),
+    "CrystalOwl": ("Crystal Owl", 15.5, 50, ["Ice", "Amber"]),
+    "PixelFox": ("Pixel Fox", 4.1, 45, ["Red", "Arctic", "Shadow"]),
+    "GoldenKey": ("Golden Key", 31.0, 40, ["Old", "Royal"]),
+    "MagicBook": ("Magic Book", 7.7, 35, ["Spell", "Rune", "Moon"]),
+    "RainCloud": ("Rain Cloud", 1.6, 30, ["Grey", "Blue"]),
+    "SunnyMill": ("Sunny Mill", 18.0, 25, ["Wheat", "Rose"]),
+}
+MODEL_STEP = 0.18
+
+CHEST_CELLS = 25
+CHEST_MAX_EMPTY = 20
+CHEST_RTP = 0.97
+CHEST_MIN_BET = 0.1
+CHEST_MAX_BET = 300.0
+
+CHEST_GIFT_BETS = os.environ.get("CHEST_GIFT_BETS", "0") == "1"
+CHEST_MIN_MULT = 1.01
+
+app = Flask(__name__, static_folder=None)
+app.secret_key = os.environ.get("ADMIN_SESSION_SECRET") or (
+    hmac.new(BOT_TOKEN.encode(), b"hatdrop-admin-cookie", hashlib.sha256).hexdigest()
+    if BOT_TOKEN else secrets.token_hex(32)
+)
+app.config.update(SESSION_COOKIE_NAME="hatdrop_admin", SESSION_COOKIE_HTTPONLY=True,
+                  SESSION_COOKIE_SAMESITE="Strict", PERMANENT_SESSION_LIFETIME=timedelta(hours=8),
+                  SESSION_COOKIE_SECURE=os.environ.get("SESSION_COOKIE_SECURE") == "1" or os.environ.get("RENDER_EXTERNAL_URL", "").startswith("https://"))
+lock = threading.RLock()
+db = {"users": {}, "prices": {}, "settings": {}}
+
+
+CATALOG = {}
+_last_saved = {"db": None, "catalog": None}
+_pg_conn = None
+
+
+def _pg():
+    global _pg_conn
+    import psycopg2
+
+    if _pg_conn is None or _pg_conn.closed:
+        _pg_conn = psycopg2.connect(DATABASE_URL, connect_timeout=10)
+        _pg_conn.autocommit = True
+        with _pg_conn.cursor() as c:
+            c.execute("CREATE TABLE IF NOT EXISTS kv (k TEXT PRIMARY KEY, v TEXT NOT NULL)")
+    return _pg_conn
+
+
+def _sqlite_conn():
+    d = os.path.dirname(SQLITE_PATH)
+    if d:
+        os.makedirs(d, exist_ok=True)
+    conn = sqlite3.connect(SQLITE_PATH, timeout=15)
+    try:
+        conn.execute("PRAGMA journal_mode=WAL")
+        conn.execute("PRAGMA synchronous=FULL")
+    except sqlite3.DatabaseError:
+        pass
+    conn.execute("CREATE TABLE IF NOT EXISTS kv (k TEXT PRIMARY KEY, v TEXT NOT NULL)")
+    return conn
+
+
+def _sqlite_get(key):
+    if not os.path.exists(SQLITE_PATH):
+        return None
+    with _sqlite_lock:
+        conn = _sqlite_conn()
+        try:
+            row = conn.execute("SELECT v FROM kv WHERE k=?", (key,)).fetchone()
+        finally:
+            conn.close()
+    return row[0] if row else None
+
+
+def store_get(key, path):
+    if DATABASE_URL:
+        with _pg().cursor() as c:
+            c.execute("SELECT v FROM kv WHERE k=%s", (key,))
+            row = c.fetchone()
+        if row:
+            return row[0]
+    else:
+        text = _sqlite_get(key)
+        if text:
+            return text
+    if os.path.exists(path):
+        with open(path, encoding="utf-8") as f:
+            return f.read()
+    return None
+
+
+def store_put(key, path, text):
+    global _pg_conn
+    if DATABASE_URL:
+        for attempt in (1, 2):
+            try:
+                with _pg().cursor() as c:
+                    c.execute(
+                        "INSERT INTO kv (k, v) VALUES (%s, %s) ON CONFLICT (k) DO UPDATE SET v = EXCLUDED.v",
+                        (key, text),
+                    )
+                return
+            except Exception as e:
+                _pg_conn = None
+                if attempt == 2:
+                    print(f"DB save failed: {e}", flush=True)
+                    raise RuntimeError("PostgreSQL persistence unavailable") from e
+    _sqlite_put(key, text)
+
+
+def _sqlite_put(key, text):
+    try:
+        with _sqlite_lock:
+            conn = _sqlite_conn()
+            try:
+                with conn:
+                    conn.execute(
+                        "INSERT INTO kv (k, v) VALUES (?, ?) ON CONFLICT(k) DO UPDATE SET v = excluded.v",
+                        (key, text),
+                    )
+            finally:
+                conn.close()
+    except Exception as e:
+        print(f"SQLite save failed: {e}", flush=True)
+        raise RuntimeError("SQLite persistence unavailable") from e
+
+
+def _target_get(key):
+
+    if DATABASE_URL:
+        with _pg().cursor() as c:
+            c.execute("SELECT v FROM kv WHERE k=%s", (key,))
+            row = c.fetchone()
+        return row[0] if row else None
+    return _sqlite_get(key)
+
+
+QUESTS_KEY = "quests"
+QUESTS_PATH = DB_PATH + ".quests"
+
+
+def quest_event(db_, user, event, **kwargs):
+
+
+    done = _quest_record_event(db_, user, event, **kwargs)
+    if done:
+        try:
+            g.quest_milestone = True
+        except RuntimeError:
+            pass
+    return done
+
+
+def quests_snapshot():
+
+    return json.dumps({"v": 1, "enabled": db["settings"].get("quests_enabled", True) is True,
+                       "quests": db.get("quests", {})}, ensure_ascii=False, sort_keys=True)
+
+
+def flush_quests():
+
+
+
+
+    with _flush_lock:
+        with lock:
+            text = quests_snapshot()
+        store_put(QUESTS_KEY, QUESTS_PATH, text)
+        if store_get(QUESTS_KEY, QUESTS_PATH) != text:
+            raise RuntimeError("quest store verification failed")
+
+
+def load_quests():
+
+    text = store_get(QUESTS_KEY, QUESTS_PATH)
+    if text:
+        try:
+            data = json.loads(text)
+            quests = data.get("quests")
+            if isinstance(quests, dict):
+                db["quests"] = quests
+                db["settings"]["quests_enabled"] = data.get("enabled", True) is True
+                return
+        except ValueError:
+            print("Quest store is corrupted; falling back to the main document", flush=True)
+    try:
+        flush_quests()
+    except Exception as exc:
+        print(f"Quest store seed failed: {exc}", flush=True)
+
+
+def load_db():
+    global db, DATABASE_URL
+    if DATABASE_URL:
+        last = None
+        for attempt in range(6):
+            try:
+                _pg()
+                last = None
+                break
+            except Exception as exc:
+                last = exc
+                print(f"PostgreSQL недоступен (попытка {attempt + 1}/6): {exc}", flush=True)
+                time.sleep(2 + attempt * 2)
+        if last is not None:
+            _db_state.update(error=str(last)[:300], fallback=True, wanted_url=DATABASE_URL)
+            print(f"WARNING: PostgreSQL недоступен ({last}). Работаю на локальной SQLite-копии.", flush=True)
+            DATABASE_URL = ""
+    text = store_get("db", DB_PATH)
+    if text:
+        db = json.loads(text)
+        _last_saved["db"] = text
+    _save_meta["rev"] = _read_meta().get("rev", 0)
+    db.setdefault("users", {})
+    db.setdefault("prices", {})
+    db.setdefault("settings", {})
+    db.setdefault("promocodes", {})
+    db.setdefault("withdrawals", {})
+    db.setdefault("quests", {})
+    db["settings"].setdefault("quests_enabled", True)
+
+    if "sections" not in db["settings"]:
+        db["settings"]["sections"] = {"chests": False}
+        save_db()
+    ensure_analytics(db)
+    db["settings"].setdefault("active_market", "portals")
+    db["settings"].setdefault("halloween_enabled", False)
+    events_lib.sync_grants(db)
+    load_quests()
+    where = "Postgres" if DATABASE_URL else f"SQLite ({SQLITE_PATH})"
+    print(f"DB: {where}, users: {len(db['users'])}", flush=True)
+    if not DATABASE_URL and not (os.environ.get("DB_PATH") or os.environ.get("SQLITE_PATH")):
+        print("WARNING: SQLite лежит в папке приложения - на хостинге без диска она сотрётся при деплое/рестарте. "
+              "Задай DATABASE_URL (Postgres) или SQLITE_PATH на постоянном диске.", flush=True)
+
+    for u in db["users"].values():
+        u["prizes"] = [p for p in u.get("prizes", []) if p.get("tier") != "bear"]
+
+        rnd = u.get("round")
+        if rnd:
+            u["balance"] = ton((u.get("balance") or 0) + (rnd.get("cost") or 0))
+            u["round"] = None
+
+
+
+
+
+
+SAVE_DELAY = float(os.environ.get("SAVE_DELAY", "0.7"))
+_dirty = threading.Event()
+_flush_lock = threading.Lock()
+
+
+_writer_id = secrets.token_hex(4)
+_save_meta = {"rev": 0, "conflict": None, "saved": 0, "bytes": 0, "users": 0}
+
+
+def _read_meta():
+    try:
+        raw = store_get("db_meta", DB_PATH + ".meta")
+        return json.loads(raw) if raw else {}
+    except Exception:
+        return {}
+
+
+def flush_db():
+
+    with _flush_lock:
+        with lock:
+            text = json.dumps(db, ensure_ascii=False)
+            users = len(db.get("users", {}))
+        if text == _last_saved["db"]:
+            return
+        meta = _read_meta()
+        if meta.get("writer") and meta["writer"] != _writer_id and meta.get("rev", 0) > _save_meta["rev"]:
+
+            _save_meta["conflict"] = {"writer": meta["writer"], "at": int(time.time())}
+            _save_meta["rev"] = meta.get("rev", 0)
+            print("WARNING: БД изменил другой процесс — запущено несколько воркеров. Запустите ровно один (gunicorn -w 1).", flush=True)
+        elif _save_meta["conflict"] and time.time() - _save_meta["conflict"]["at"] > 180 and (not meta.get("writer") or meta["writer"] == _writer_id):
+            _save_meta["conflict"] = None
+        store_put("db", DB_PATH, text)
+        _last_saved["db"] = text
+        _save_meta.update(rev=max(meta.get("rev", 0), _save_meta["rev"]) + 1, saved=int(time.time()), bytes=len(text), users=users)
+        try:
+            store_put("db_meta", DB_PATH + ".meta", json.dumps({"rev": _save_meta["rev"], "writer": _writer_id, "saved": _save_meta["saved"], "bytes": len(text), "users": users}))
+        except Exception as exc:
+            print("meta save failed:", exc, flush=True)
+
+
+def save_db():
+    _dirty.set()
+
+
+BACKUP_EVERY = float(os.environ.get("BACKUP_HOURS", "6")) * 3600
+BACKUP_KEEP = int(os.environ.get("BACKUP_KEEP", "14"))
+
+
+def backup_sqlite():
+
+    if DATABASE_URL or not os.path.exists(SQLITE_PATH):
+        return ""
+    folder = os.environ.get("BACKUP_DIR") or os.path.join(os.path.dirname(os.path.abspath(SQLITE_PATH)), "backups")
+    os.makedirs(folder, exist_ok=True)
+    dest = os.path.join(folder, time.strftime("data-%Y%m%d-%H%M%S.sqlite3"))
+    with _sqlite_lock:
+        src = sqlite3.connect(SQLITE_PATH, timeout=15)
+        try:
+            dst = sqlite3.connect(dest)
+            try:
+                src.backup(dst)
+            finally:
+                dst.close()
+        finally:
+            src.close()
+    for old in sorted(f for f in os.listdir(folder) if f.startswith("data-") and f.endswith(".sqlite3"))[:-BACKUP_KEEP]:
+        try:
+            os.remove(os.path.join(folder, old))
+        except OSError:
+            pass
+    return dest
+
+
+def _backup_loop():
+    time.sleep(60)
+    while True:
+        try:
+            flush_db()
+            backup_sqlite()
+        except Exception as e:
+            print("SQLite backup failed:", e, flush=True)
+        time.sleep(BACKUP_EVERY)
+
+
+def _saver_loop():
+    while True:
+        _dirty.wait()
+        time.sleep(SAVE_DELAY)
+        _dirty.clear()
+        try:
+            flush_db()
+        except Exception as e:
+            _dirty.set()
+            print(f"DB flush failed: {e}", flush=True)
+            time.sleep(5)
+
+
+def _flush_on_exit(*_):
+    try:
+        flush_db()
+        flush_quests()
+        save_catalog()
+    except Exception as e:
+        print(f"final flush failed: {e}", flush=True)
+    try:
+        if BOT_TOKEN and BACKUP_TG_HOURS > 0 and os.environ.get("PYTEST_CURRENT_TEST") is None:
+            send_backup_to_owner(force=False)
+    except Exception as e:
+        print(f"exit backup failed: {e}", flush=True)
+
+
+def _install_exit_hooks():
+    atexit.register(_flush_on_exit)
+    try:
+        prev = signal.getsignal(signal.SIGTERM)
+
+        def on_term(signum, frame):
+            _flush_on_exit()
+            if callable(prev):
+                prev(signum, frame)
+            else:
+                raise SystemExit(0)
+
+        signal.signal(signal.SIGTERM, on_term)
+    except (ValueError, OSError):
+        pass
+
+
+def load_catalog():
+    text = store_get("catalog", DB_PATH + ".catalog")
+    if text:
+        CATALOG.clear()
+        CATALOG.update(json.loads(text))
+        _last_saved["catalog"] = text
+
+    if int(db["settings"].get("catalog_version") or 0) < 3:
+        CATALOG.clear()
+        db["prices"].clear()
+        db["settings"]["catalog_version"] = 3
+        save_catalog()
+        save_db()
+
+
+def save_catalog():
+    text = json.dumps(CATALOG, ensure_ascii=False)
+    if text != _last_saved["catalog"]:
+        store_put("catalog", DB_PATH + ".catalog", text)
+        _last_saved["catalog"] = text
+
+
+class ApiError(Exception):
+    def __init__(self, code, status=400, **extra):
+        self.code = code
+        self.status = status
+        self.extra = extra
+
+
+@app.errorhandler(ApiError)
+def handle_api_error(e):
+    return jsonify({"error": e.code, **e.extra}), e.status
+
+
+def portals_auth():
+    return (db["settings"].get("portals_auth") or PORTALS_AUTH).strip()
+
+
+def mask_key(key):
+    if not key:
+        return ""
+    return "••••" + key[-4:] if len(key) > 8 else "••••"
+
+
+def money(x):
+    return float(Decimal(repr(float(x))).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP))
+
+
+def ton(x):
+    return round(float(x), 6)
+
+
+HATCOIN_UNITS = 1_000_000
+HATCOIN_PER_TON = Decimal("0.1")
+
+
+def hatcoin_cashback_percent():
+    # admin setting (personal boss panel); falls back to the historical 10%
+    try:
+        value = float(db.get("settings", {}).get("hatcoin_cashback_percent", float(HATCOIN_PER_TON) * 100))
+    except (TypeError, ValueError):
+        value = float(HATCOIN_PER_TON) * 100
+    return value if math.isfinite(value) and 0 <= value <= 1000 else float(HATCOIN_PER_TON) * 100
+
+
+def hatcoin_rate():
+    return Decimal(repr(hatcoin_cashback_percent())) / 100
+
+
+def hatcoin_balance(user):
+    return user.get("hatcoin_units", 0) / HATCOIN_UNITS
+
+
+def credit_hatcoin(user, stake_ton):
+
+    units = int((Decimal(str(stake_ton)) * hatcoin_rate() * HATCOIN_UNITS)
+                .quantize(Decimal("1"), rounding=ROUND_HALF_UP))
+    user["hatcoin_units"] = user.get("hatcoin_units", 0) + units
+
+
+def gifts_map():
+
+    if CATALOG:
+        return CATALOG
+    if db.get("settings", {}).get("active_market") in ("portals", "mrkt"):
+        return {}
+    out = {}
+    for slug, (name, floor, pop, models) in GIFTS.items():
+        out[slug] = {
+            "name": name,
+            "floor": floor,
+            "pop": pop,
+            "models": [{"model": m, "floor": money(floor * (1 + MODEL_STEP * i))} for i, m in enumerate(models)],
+        }
+    return out
+
+
+def gift_entry(slug):
+    entry = gifts_map().get(slug)
+    if not entry:
+        raise ApiError("gift_unavailable")
+    return entry
+
+
+def gift_floor(slug):
+    entry = gift_entry(slug)
+    return db["prices"].get(slug, entry.get("floor", 0))
+
+
+def gift_models(slug):
+    entry = gift_entry(slug)
+    floor = gift_floor(slug)
+    out = []
+    for m in entry.get("models", []):
+        price = ton(m.get("floor") or 0)
+        if price <= 0 or m.get("source") in ("fragment-estimate", "fragment-no-model-floor"):
+            continue
+        out.append({"model": m["model"], "price_ton": price,
+                    "image": gift_image(slug, m["model"]),
+                    "rarity_per_mille": m.get("rarity_per_mille"),
+                    "source": m.get("source", "")})
+    return out
+
+
+def gift_image(slug, model=""):
+    entry = gifts_map().get(slug) or {}
+    if not model:
+        return _original_image_url(entry, slug)
+    for m in entry.get("models", []):
+        if m.get("model") == model:
+            direct = str(m.get("image") or "")
+            if direct.startswith(("https://cdn.tgmrkt.io/", "https://fragment.com/file/", "https://cdn.changes.tg/")):
+                return direct
+            break
+    return ("https://cdn.changes.tg/gifts/models/" +
+            quote(entry.get("name", slug), safe="") + "/png/" + quote(model, safe="") + ".png")
+
+
+def gift_price(slug, model):
+    if slug not in gifts_map():
+        raise ApiError("gift_unavailable")
+    if not model:
+        result = gift_floor(slug)
+        if result <= 0:
+            raise ApiError("gift_price_unavailable")
+        return result
+    for m in gift_models(slug):
+        if m["model"] == model:
+            return m["price_ton"]
+    raise ApiError("gift_unavailable")
+
+
+def chest_mult(empties, opened):
+    if opened <= 0:
+        return 1.0
+    fair = comb(CHEST_CELLS, opened) / comb(CHEST_CELLS - empties, opened)
+    return max(CHEST_MIN_MULT, money(fair * CHEST_RTP))
+
+
+CHEST_LADDER = {
+    str(m): [chest_mult(m, k) for k in range(1, CHEST_CELLS - m + 1)] for m in range(1, CHEST_MAX_EMPTY + 1)
+}
+
+
+def spin_cost(value, chance):
+    return max(0.01, money(value * chance / (1 - MARGIN)))
+
+
+
+
+
+
+RTP_NOMINAL = {"upgrade": round((1 - MARGIN) * 100, 2), "chests": round(CHEST_RTP * 100, 2)}
+RTP_MODES = tuple(RTP_NOMINAL)
+RTP_MIN, RTP_MAX = 0.0, 150.0
+
+
+def _rtp_number(value, lo, hi):
+    try:
+        value = float(value)
+    except (TypeError, ValueError, OverflowError):
+        raise ApiError("bad_request")
+    if value != value or not lo <= value <= hi:
+        raise ApiError("bad_request")
+    return round(value, 2)
+
+
+def global_rtp(mode):
+    saved = db["settings"].get("rtp")
+    try:
+        value = float(saved[mode]) if isinstance(saved, dict) and mode in saved else RTP_NOMINAL[mode]
+    except (TypeError, ValueError):
+        value = RTP_NOMINAL[mode]
+    return min(RTP_MAX, max(RTP_MIN, value))
+
+
+def user_rtp_adj(user, mode):
+    adj = user.get("rtp_adj")
+    try:
+        return float(adj.get(mode, 0)) if isinstance(adj, dict) else 0.0
+    except (TypeError, ValueError):
+        return 0.0
+
+
+def effective_rtp(user, mode):
+    return min(RTP_MAX, max(RTP_MIN, global_rtp(mode) + user_rtp_adj(user, mode)))
+
+
+def rtp_factor(user, mode):
+    return effective_rtp(user, mode) / RTP_NOMINAL[mode]
+
+
+def verified_telegram_user(init_data):
+    if not (BOT_TOKEN and init_data):
+        return None
+    pairs = dict(parse_qsl(init_data, keep_blank_values=True))
+    received = pairs.pop("hash", "")
+    check = "\n".join(f"{k}={v}" for k, v in sorted(pairs.items()))
+    secret = hmac.new(b"WebAppData", BOT_TOKEN.encode(), hashlib.sha256).digest()
+    expected = hmac.new(secret, check.encode(), hashlib.sha256).hexdigest()
+    if not hmac.compare_digest(expected, received):
+        raise ApiError("unauthorized", 401)
+    try:
+        return json.loads(pairs.get("user", "{}"))
+    except ValueError:
+        raise ApiError("unauthorized", 401)
+
+
+REFERRAL_MIN_WITHDRAW = 1.0
+
+
+def telegram_start_param(init_data):
+    try:
+        return str(dict(parse_qsl(init_data or "", keep_blank_values=True)).get("start_param", ""))[:64]
+    except ValueError:
+        return ""
+
+
+def referral_percent():
+    try:
+        return min(50.0, max(0.0, float(db["settings"].get("referral_percent", 10))))
+    except (TypeError, ValueError):
+        return 10.0
+
+
+def referrer_from_param(param, new_uid):
+    if not param.startswith("ref_"):
+        return ""
+    key = param[4:]
+    owner = next((u for u in db["users"].values() if u.get("ref_created") and u["key"] == key), None)
+    return owner["id"] if owner and owner["id"] != new_uid else ""
+
+
+def bot_username():
+    name = str(db["settings"].get("bot_username") or "").strip().lstrip("@")
+    if name or not BOT_TOKEN:
+        return name
+    try:
+        name = str((tg_api("getMe") or {}).get("username") or "").strip()
+    except Exception:
+        return ""
+    if name:
+        db["settings"]["bot_username"] = name
+    return name
+
+
+def referral_view(user):
+    username = bot_username()
+    count = sum(1 for u in db["users"].values() if u.get("ref_by") == user["id"])
+    created = bool(user.get("ref_created"))
+    return {
+        "percent": referral_percent(),
+        "created": created,
+        "code": user.get('ref_code', ''),
+        "code_uses": db.get('promocodes', {}).get(user.get('ref_code', ''), {}).get('uses', 0),
+        "code_enabled": campaign_defaults()['enabled'],
+        "code_benefits": referral_code_benefits(user),
+        "bound_code": user.get('referral_code_claimed', ''),
+        "link": f"https://t.me/{username}?startapp=ref_{user['key']}" if created and username else "",
+        "count": count,
+        "earned_ton": ton(user.get("ref_earned", 0)),
+        "balance_ton": ton(user.get("ref_balance", 0)),
+        "min_withdraw_ton": REFERRAL_MIN_WITHDRAW,
+        "pending_ton": 0,
+    }
+
+
+def credit_referral_bonus(user, amount):
+
+    owner = db["users"].get(user.get("ref_by", ""))
+    bonus = ton(amount * referral_percent() / 100)
+    if not owner or bonus <= 0:
+        return 0.0
+    owner["ref_balance"] = ton(owner.get("ref_balance", 0) + bonus)
+    owner["ref_earned"] = ton(owner.get("ref_earned", 0) + bonus)
+    return bonus
+
+
+def maintenance_cfg():
+    m = db.get("settings", {}).get("maintenance")
+    m = m if isinstance(m, dict) else {}
+    return {"enabled": m.get("enabled") is True, "text": str(m.get("text") or "")[:300]}
+
+
+def current_user():
+    body = request.get_json(silent=True) or {}
+
+    if not body.get("initData") and (request.path.startswith("/api/admin/") or request.path in ("/api/gifts/catalog", "/api/gifts/models")):
+        admin_user = admin_session_user()
+        if admin_user:
+            csrf = request.headers.get("X-Admin-CSRF", "")
+            if not csrf or not hmac.compare_digest(csrf, session.get("admin_csrf", "")):
+                raise ApiError("csrf_failed", 403)
+            return admin_user, body
+    tg = verified_telegram_user(body.get("initData", ""))
+    if request.path.startswith("/api/admin/") and not tg:
+        raise ApiError("forbidden", 403)
+    if tg and tg.get("id"):
+        uid = f"tg{tg['id']}"
+    else:
+        demo = str(body.get("demoId", "anon"))[:64]
+        uid = "demo" + hashlib.sha1(demo.encode()).hexdigest()[:12]
+    users = db["users"]
+    if uid not in users:
+        print(f"new user: {uid}", flush=True)
+        users[uid] = {
+            "id": uid,
+            "key": secrets.token_hex(6),
+            "username": (tg or {}).get("username", ""),
+            "photo_url": (tg or {}).get("photo_url", ""),
+            "first_name": (tg or {}).get("first_name", "") or f"Игрок {uid[-4:]}",
+            "wallet": "",
+            "anon": False,
+            "balance": START_BALANCE,
+            "hatcoin_units": 0,
+            "turnover": 0.0,
+            "games": 0,
+            "bear_given": False,
+            "next_prize_id": 1,
+            "prizes": [],
+            "history": [],
+            "round": None,
+            "promos": [],
+            "seen": 0,
+            "created": int(time.time()),
+        }
+        referrer = referrer_from_param(telegram_start_param(body.get("initData", "")), uid) if tg else ""
+        if referrer:
+            users[uid]["ref_by"] = referrer
+    user = users[uid]
+    if user.get("banned") and not request.path.startswith("/api/admin/") and not is_admin(user):
+        raise ApiError("banned", 403, message="Аккаунт заблокирован администратором.")
+    maint = maintenance_cfg()
+    if maint["enabled"] and not request.path.startswith("/api/admin/") and not is_admin(user):
+        raise ApiError("maintenance", 503, message=maint["text"] or "Сервис на технических работах. Скоро вернёмся.")
+    user.setdefault("hatcoin_units", 0)
+    user.setdefault("chest", None)
+    user["seen"] = int(time.time())
+    if tg:
+        user["username"] = tg.get("username", user["username"])
+        user["first_name"] = tg.get("first_name", user["first_name"])
+        user["photo_url"] = tg.get("photo_url") or user.get("photo_url", "")
+    return user, body
+
+
+# ---- admin audit log: who changed what and when (last 300 changing actions) ----
+_ADMIN_WRITE_TAILS = {"save", "set", "create", "update", "delete", "remove", "add", "resolve", "start", "finish", "clear",
+                      "restore", "import", "upload", "sync", "setup", "refresh", "send", "auto", "source", "entry",
+                      "flags", "hatcoin", "visibility", "settings", "balance"}
+_ADMIN_LOG_VALUES = {"sections", "enabled", "action", "key", "amount", "delta", "status", "id", "value", "text", "kind", "tier"}
+
+
+def _admin_write(path, body):
+    tail = path.rstrip("/").rsplit("/", 1)[-1]
+    if path == "/api/admin/maintenance":
+        return "enabled" in body or "text" in body
+    if path in ("/api/admin/theme", "/api/admin/event"):
+        return body.get("action") in ("save", "start", "finish") or "enabled" in body
+    return tail in _ADMIN_WRITE_TAILS
+
+
+def _admin_audit(user, body):
+    if not request.path.startswith("/api/admin/") or request.path == "/api/admin/log" or not _admin_write(request.path, body):
+        return
+    details = {}
+    for k, v in (body or {}).items():
+        if k in ("initData", "demoId"):
+            continue
+        if k not in _ADMIN_LOG_VALUES:
+            details[k] = "…"                      # only the field name, not its value
+        elif isinstance(v, (bool, int, float)) or isinstance(v, dict) and len(str(v)) <= 200:
+            details[k] = v
+        else:
+            details[k] = str(v)[:80]
+    log = db.setdefault("admin_log", [])
+    log.append({"ts": int(time.time()), "uid": user.get("id", ""),
+                "name": user.get("username") or user.get("first_name") or user.get("id", ""),
+                "path": request.path[len("/api/admin/"):], "details": details})
+    if len(log) > 300:
+        del log[:-300]
+
+
+def api(fn):
+    def wrapper(*args, **kwargs):
+        with lock:
+            user, body = current_user()
+            result = fn(user, body)
+            try:
+                _admin_audit(user, body)
+            except Exception as exc:
+                print(f"admin audit failed: {exc}", flush=True)
+            save_db()
+            response = jsonify(result)
+
+
+        _READ_ONLY = ("/api/state", "/api/leaderboard", "/api/quests", "/api/shop", "/api/gifts/", "/api/admin/")
+        if response.status_code == 200 and request.path != "/api/shop/buy" and not request.path.startswith(_READ_ONLY):
+            try:
+                flush_db()
+            except Exception as exc:
+                print(f"DB flush failed: {exc}", flush=True)
+        if request.path in ("/api/admin/copy/save", "/api/withdraw", "/api/shop/buy", "/api/staking/add", "/api/staking/deposit/balance", "/api/staking/remove", "/api/staking/withdraw", "/api/admin/staking/settings", "/api/admin/staking/user") and response.status_code == 200:
+            try:
+                flush_db()
+            except Exception as exc:
+                print(f"Shop persistence failed: {exc}", flush=True)
+                return jsonify({"error": "db_save_failed"}), 503
+        if request.path in ("/api/admin/quests/save", "/api/admin/user/quests/save", "/api/quests/claim", "/api/admin/theme", "/api/admin/event", "/api/admin/kostyan", "/api/admin/promos/create", "/api/admin/promos/update", "/api/admin/weapons/visibility", "/api/admin/sections/save", "/api/admin/referral/defaults", "/api/referral/code/create", "/api/admin/season/finish", "/api/admin/season/clear") or g.get("quest_milestone"):
+            try:
+                if request.path in ("/api/admin/quests/save", "/api/admin/user/quests/save", "/api/admin/theme", "/api/admin/event"):
+                    flush_quests()
+                flush_db()
+            except Exception as exc:
+                print(f"Quest persistence failed: {exc}", flush=True)
+                if request.path in ("/api/admin/quests/save", "/api/admin/user/quests/save", "/api/quests/claim", "/api/admin/theme", "/api/admin/event", "/api/admin/kostyan", "/api/admin/promos/create", "/api/admin/promos/update", "/api/admin/weapons/visibility", "/api/admin/sections/save", "/api/admin/referral/defaults", "/api/referral/code/create", "/api/admin/season/finish", "/api/admin/season/clear"):
+                    return jsonify({"error": "db_save_failed"}), 503
+        return response
+
+    wrapper.__name__ = fn.__name__
+    return wrapper
+
+
+def route(path):
+    def deco(fn):
+        app.add_url_rule(path, fn.__name__, api(fn), methods=["POST"])
+        return fn
+
+    return deco
+
+
+def admin_io(path):
+
+    def deco(fn):
+        def view():
+            with lock:
+                user, body = current_user()
+                require_admin(user)
+            try:
+                result = fn(body)
+            except ApiError:
+                raise
+            except relayer_lib.RelayerError as exc:
+                raise ApiError("relayer_error", 409, message=str(exc))
+            except Exception as exc:
+                print(f"relayer call failed: {type(exc).__name__}: {exc}", flush=True)
+                raise ApiError("relayer_error", 409, message=relayer_lib.explain(exc))
+            with lock:
+                save_db()
+            try:
+                flush_db()
+            except Exception as exc:
+                print(f"relayer persistence failed: {exc}", flush=True)
+            return jsonify(result)
+        view.__name__ = fn.__name__
+        app.add_url_rule(path, fn.__name__, view, methods=["POST"])
+        return fn
+    return deco
+
+
+LEVEL_COUNT_DEFAULT, LEVEL_COUNT_MAX = 60, 200
+
+
+def level_cfg():
+    raw = db.get("settings", {}).get("level_cfg")
+    raw = raw if isinstance(raw, dict) else {}
+    needs = {}
+    for k, v in (raw.get("needs") or {}).items():
+        try:
+            needs[int(k)] = float(v)
+        except (TypeError, ValueError):
+            continue
+    try:
+        count = int(raw.get("count") or LEVEL_COUNT_DEFAULT)
+    except (TypeError, ValueError):
+        count = LEVEL_COUNT_DEFAULT
+    return {"count": min(LEVEL_COUNT_MAX, max(1, count)), "needs": needs}
+
+
+def level_need(n, needs=None):
+
+    if n <= 1:
+        return 0.0
+    needs = level_cfg()["needs"] if needs is None else needs
+    return float(needs.get(n, (n - 1) ** 2 * 5))
+
+
+def level_info(turnover):
+    needs = level_cfg()["needs"]
+    if not needs:
+        level = int((turnover / 5) ** 0.5) + 1
+    else:
+        level = 1
+        while level < 1000 and level_need(level + 1, needs) <= turnover:
+            level += 1
+    low, high = level_need(level, needs), level_need(level + 1, needs)
+    return {
+        "level": level,
+        "progress": min(1.0, max(0.0, (turnover - low) / (high - low))) if high > low else 1.0,
+        "next_ton": high,
+        "turnover_ton": ton(turnover),
+    }
+
+
+def effective_admin_ids():
+    ids = set(ADMIN_IDS)
+    for uid, enabled in db.get("settings", {}).get("admin_access", {}).items():
+        if enabled is True:
+            ids.add(uid)
+        elif enabled is False:
+            ids.discard(uid)
+    ids.add(OWNER_ADMIN_ID)
+    return ids
+
+
+def is_admin(user):
+    uid = str(user["id"])
+    return uid.startswith("tg") and uid[2:] in effective_admin_ids()
+
+
+def display_name(user):
+    if user["anon"]:
+        return "Аноним"
+    return f"@{user['username']}" if user["username"] else user["first_name"]
+
+
+def best_prize(user):
+    won = [p for p in user["prizes"] if p["tier"] != "bear"]
+    if not won:
+        return None
+    p = max(won, key=lambda x: x["value"])
+    return {"value_ton": p["value"], "name": p["name"], "tier": p["tier"], "image": p.get("image", "")}
+
+
+def game_progress(user):
+    saved = user.get("game_progress")
+    if isinstance(saved, dict) and saved.get("version") == 1:
+        return {**saved, "modes": dict(saved.get("modes", {}))}
+    history = user.get("history", [])
+    modes = {"upgrade": 0, "chests": 0}
+    best = 0.0
+    for row in history:
+        kind = row.get("kind", "other")
+        modes[kind] = modes.get(kind, 0) + 1
+        if row.get("win") and row.get("cost_ton", 0) > 0:
+            best = max(best, row.get("payout_ton", 0) / row["cost_ton"])
+    return {"version": 1, "modes": modes, "max_multiplier": round(best, 6),
+            "unclassified_games": max(0, user.get("games", 0) - len(history))}
+
+
+def user_stats(user):
+    withdrawn = [p for p in user["prizes"] if p["status"] in ("withdraw_pending", "withdraw_processing", "withdrawn")]
+    return {
+        "withdrawn_ton": ton(sum(p["value"] for p in withdrawn)),
+        "withdrawn_count": len(withdrawn),
+        "turnover_ton": ton(user["turnover"]),
+        "games": user["games"],
+        "best": best_prize(user),
+    }
+
+
+def prize_view(p):
+    out = {"id": p["id"], "status": p["status"], "tier": p["tier"], "name": p["name"], "image": p.get("image", ""),
+           "value_ton": money(p["value"]),'withdraw_fee_ton':prize_withdraw_fee(p)}
+    if p["status"] in ("owned", "withdraw_pending"):
+        out["sell_ton"] = money(p["value"] * p.get("sell_rate", SELL_SHARE))
+    return out
+
+
+def visible_prizes(user):
+    return [prize_view(p) for p in reversed(user["prizes"]) if p["status"] != "sold" and p["tier"] != "bear"]
+
+def prize_withdraw_fee(prize):
+    from staking import hat
+    return 0.0 if hat(prize) else 0.4
+
+
+def tier_config(tier):
+    value = TIERS[tier]["value"]
+    return {
+        "chances": [{"chance": c, "cost_ton": spin_cost(value, c)} for c in CHANCES],
+        "default_chance": 0.5,
+        "prize_name": TIERS[tier]["name"],
+        "value_ton": value,
+    }
+
+
+SECTION_LABELS = {"upgrade": "Апгрейды", "chests": "Мины / сундуки", "leaders": "Лидеры", "quests": "Лавка Костяна", "staking": "Стейкинг шляп"}
+
+
+def section_config():
+    saved = db["settings"].get("sections", {})
+    return {key: saved.get(key, True) is True for key in SECTION_LABELS}
+
+
+def require_section(key):
+    if not section_config()[key]:
+        raise ApiError("section_unavailable", 403, message="Раздел в разработке. Скоро!", section=key)
+
+
+def public_config():
+    base = tier_config("random")
+    return {
+        **base,
+        "tiers": {t: tier_config(t) for t in TIERS},
+        "sections": section_config(),
+        "tier_enabled": True,
+        "gift_upgrade": True,
+        "margin": MARGIN,
+        "chance_min": MIN_CHANCE_PCT / 100,
+        "chance_max": MAX_CHANCE_PCT / 100,
+        "min_deposit_ton": MIN_DEPOSIT,
+        "gift_deposit": gift_deposit_config(),
+        "stars_deposit": stars_config(),
+        "crypto_deposit": crypto_public(),
+        "chests": {
+            "enabled": section_config()["chests"],
+            "gift_bets": CHEST_GIFT_BETS,
+            "cells": CHEST_CELLS,
+            "min_bet": CHEST_MIN_BET,
+            "max_bet": CHEST_MAX_BET,
+            "max_empty": CHEST_MAX_EMPTY,
+            "ladder": CHEST_LADDER,
+        },
+    }
+
+
+def effective_theme(user):
+
+    st = db["settings"]
+    epoch = int(st.get("halloween_epoch") or 0)
+    if st.get("halloween_enabled") is True and user.get("theme_epoch") != epoch and "theme_halloween" not in hidden_for(user):
+        user["theme"], user["theme_epoch"] = "halloween", epoch
+    theme = user.get("theme") or "meadow"
+    if (theme == "halloween" and st.get("halloween_enabled") is not True
+            and not weapons_lib.has(user, "theme_halloween")):
+        theme = user["theme"] = "meadow"
+    if "theme_" + theme not in weapons_lib.owned(user) or "theme_" + theme in hidden_for(user):
+        theme = "meadow"
+    return theme
+
+
+LEVEL_REWARD_MAX = 200
+
+
+def level_table_view(user):
+
+    cfg = level_cfg()
+    rewards = db["settings"].get("level_rewards") or {}
+    claimed = set(user.get("lvl_claimed") or [])
+    rows = []
+    for n in range(1, cfg["count"] + 1):
+        r = rewards.get(str(n))
+        row = {"level": n, "need": level_need(n, cfg["needs"]), "reward": bool(r), "claimed": n in claimed}
+        if r and n in claimed:
+            try:
+                row["view"] = shop_reward_view(r)
+            except (KeyError, TypeError):
+                pass
+        rows.append(row)
+    return rows
+
+
+def grant_weapon(user, wid):
+
+    if weapons_lib.required_theme(wid) and not weapons_lib.has(user, weapons_lib.required_theme(wid)):
+        raise ApiError("theme_required", 400, message="Сначала получите оформление, к которому привязано снаряжение.")
+    weapons_lib.grant(user, wid)
+    if wid in weapons_lib.hidden_set(db["settings"]):
+        shown = user.setdefault("unhidden", [])
+        if wid not in shown:
+            shown.append(wid)
+
+
+def hidden_for(user):
+    temporary = weapons_lib.EVENT_GRANTS.get(weapons_lib.ACTIVE_EVENT, set())
+    retained_themes = {wid for wid, meta in weapons_lib.WEAPONS.items() if meta.get("kind") == "theme" and weapons_lib.has(user, wid)}
+    hidden = weapons_lib.hidden_set(db["settings"])
+
+    theme_hidden = {wid for wid in hidden if weapons_lib.WEAPONS[wid].get("kind") == "theme"}
+    return sorted((hidden - theme_hidden - set(user.get("unhidden", [])) - temporary) | (theme_hidden - retained_themes))
+
+
+def grant_reward(user, r):
+    if r["kind"] == "ton":
+        user["balance"] = ton(user["balance"] + r["amount"])
+    elif r["kind"] == "hatcoin":
+        user["hatcoin_units"] = user.get("hatcoin_units", 0) + int(round(r["amount"] * HATCOIN_UNITS))
+    elif r["kind"] == "weapon" and r["weapon"] in weapons_lib.WEAPONS:
+        grant_weapon(user, r["weapon"])
+
+
+@route("/api/level/claim")
+def level_claim(user, body):
+
+    try:
+        n = int(body.get("level"))
+    except (TypeError, ValueError):
+        raise ApiError("bad_request")
+    r = (db["settings"].get("level_rewards") or {}).get(str(n))
+    if not r:
+        raise ApiError("not_found", 404, message="За этот уровень награды нет.")
+    if level_info(user["turnover"])["level"] < n:
+        raise ApiError("locked", 400, message="Уровень ещё не достигнут.")
+    done = user.setdefault("lvl_claimed", [])
+    if n in done:
+        raise ApiError("already_claimed", 400, message="Награда уже получена.")
+    done.append(n)
+    grant_reward(user, r)
+    return {"ok": True, "view": shop_reward_view(r), "balance_ton": ton(user["balance"]),
+            "hatcoin": {"balance": hatcoin_balance(user), "rate_per_ton": float(hatcoin_rate())},
+            "weapons": weapons_lib.owned(user), "level_table": level_table_view(user)}
+
+
+def full_state(user):
+    weapons_lib.reconcile_theme_equipment(user)
+    return {
+        "balance_ton": ton(user["balance"]),
+        "config": public_config(),
+        "user": {
+            "username": user["username"],
+            "first_name": user["first_name"],
+            "wallet": user["wallet"],
+            "anon": user["anon"],
+            "avatar": avatar(user, own=True),
+        },
+        "deposit_promo": deposit_campaign_view(user),
+        "free_spins": free_spins_view(user),
+        "deposit": {"address": tonconnect_config()["recipient_address"], "memo": f"u{user['key']}"},
+        "prizes": visible_prizes(user),
+        "chest_round": chest_view(user),
+        "hatcoin": {"balance": hatcoin_balance(user), "rate_per_ton": float(hatcoin_rate())},
+        "level": level_info(user["turnover"]),
+        "weapons": weapons_lib.owned(user),
+        "permanent_weapons": [wid for wid in weapons_lib.WEAPONS if weapons_lib.has(user, wid)],
+        "tour_done": bool(user.get("tour_done")),
+        "tour_sections": tour_sections(user),
+        "kostyan_dialogues": dialogues_lib.view(db),
+        "theme": effective_theme(user),
+        "level_table": level_table_view(user),
+        "maintenance": maintenance_cfg()["enabled"],
+        "stats": user_stats(user),
+        "fairness": {"nonce": user["games"]},
+        "withdraw_locked_until": int(user.get("stars_lock_until", 0) or 0),
+        "server_time": int(time.time()),
+        "is_admin": is_admin(user),
+        "halloween_enabled": db["settings"].get("halloween_enabled") is True,
+        "event_content_version": int(db["settings"].get("event_content_version") or 0),
+        "weapon_hidden": hidden_for(user),
+        "lavka_hidden": lavka_hidden(),
+        "referral": referral_view(user),
+    }
+
+
+def add_prize(user, tier, name, value, image=""):
+    prize = {
+        "id": user["next_prize_id"],
+        "status": "owned",
+        "tier": tier,
+        "name": name,
+        "value": money(value),
+        "image": image,
+    }
+    user["next_prize_id"] += 1
+    user["prizes"].append(prize)
+    return prize
+
+
+def record_game(user, kind, cost, win, target, image, bear, payout=0):
+    ts = int(time.time())
+    progress = game_progress(user)
+    progress["modes"][kind] = progress["modes"].get(kind, 0) + 1
+    if win and cost > 0:
+        progress["max_multiplier"] = round(max(progress["max_multiplier"], payout / cost), 6)
+    user["game_progress"] = progress
+    record_round(db, user, kind, cost, payout, win, ts)
+    quest_event(db, user, "turnover", amount=cost, ts=ts)
+    user["turnover"] += cost
+    cur = season_current()
+    if kind != "chests":
+        boss_hit(user, cost, ts, mode=kind)
+    if cur and cur.get("mode") != "boss" and not cur.get("finished") and cur["start"] <= ts < cur["end"]:
+        user["season_turnover"] = {cur["id"]: ton(season_score(user, cur) + cost)}
+    user["games"] += 1
+    user["history"].insert(
+        0,
+        {"ts": ts, "kind": kind, "win": win, "bear": bear, "cost_ton": cost, "payout_ton": payout, "target": target, "image": image},
+    )
+    del user["history"][HISTORY_LIMIT:]
+
+
+def consolation(user):
+    return None
+
+
+def resolve_target(body, tier):
+    if tier == "gift":
+        slug = body.get("gift", "")
+        model = body.get("model", "")
+        price = gift_price(slug, model)
+        name = gift_entry(slug)["name"] + (f" · {model}" if model else "")
+        return {"tier": f"gift:{slug}:{model}", "name": name, "value": price, "image": gift_image(slug, model)}
+    if tier not in TIERS:
+        raise ApiError("bad_request")
+    return {"tier": tier, "name": TIERS[tier]["name"], "value": TIERS[tier]["value"], "image": ""}
+
+
+@route("/api/state")
+def state(user, body):
+    relayer_kick()
+    return full_state(user)
+
+
+def upgrade_chance(bet, target_value):
+
+    if target_value <= 0:
+        raise ApiError("gift_price_unavailable")
+    return round(max(0.0, bet / target_value - MARGIN), 4)
+
+
+@route("/api/spin")
+def spin(user, body):
+    require_section("upgrade")
+    try:
+        chance = float(body.get("chance"))
+    except (TypeError, ValueError):
+        raise ApiError("bad_request")
+    pct = chance * 100
+    if abs(pct - round(pct)) > 1e-6 or not (MIN_CHANCE_PCT <= round(pct) <= MAX_CHANCE_PCT):
+        raise ApiError("bad_request")
+    chance = round(pct) / 100
+    target = resolve_target(body, body.get("tier", "random"))
+    cost = spin_cost(target["value"], chance)
+    if body.get("tier") == "gift":
+        asked = body.get("cost")
+        if not isinstance(asked, (int, float)) or abs(asked - cost) > 0.005:
+            raise ApiError("price_changed", price_ton=target["value"], cost_ton=cost)
+    if user["balance"] + 1e-9 < cost:
+        raise ApiError("insufficient_funds")
+    user["balance"] = ton(user["balance"] - cost)
+    credit_hatcoin(user, cost)
+    real_chance = min(1.0, chance * rtp_factor(user, "upgrade"))
+    win = secrets.randbelow(1_000_000) < real_chance * 1_000_000
+    bear = None
+    if win:
+        add_prize(user, target["tier"], target["name"], target["value"], target["image"])
+    else:
+        bear = consolation(user)
+    quest_event(db, user, "wheel_spin")
+    quest_event(db, user, "upgrade_play", chance_pct=chance * 100)
+    if win:
+        quest_event(db, user, "wheel_win")
+        quest_event(db, user, "upgrade_win", chance_pct=chance * 100)
+    record_game(user, "upgrade", cost, win, target["name"], target["image"] or f"tier:{target['tier']}", bool(bear), target["value"] if win else 0)
+    return {"win": win, "balance_ton": ton(user["balance"]), "hatcoin_balance": hatcoin_balance(user), "consolation": bear}
+
+
+def chest_view(user):
+    r = user.get("chest")
+    if not r:
+        return None
+    k = len(r["opened"])
+    return {
+        "bet": r["bet"],
+        "empties": r["empties"],
+        "opened": r["opened"],
+        "source": r["source"],
+        "mult": chest_mult(r["empties"], k),
+        "next_mult": chest_mult(r["empties"], k + 1) if k < CHEST_CELLS - r["empties"] else None,
+    }
+
+
+@route("/api/chests/start")
+def chests_start(user, body):
+    require_section("chests")
+    if user.get("chest"):
+        raise ApiError("round_active", round=chest_view(user))
+    try:
+        empties = int(body.get("empties"))
+    except (TypeError, ValueError):
+        raise ApiError("bad_request")
+    if not 1 <= empties <= CHEST_MAX_EMPTY:
+        raise ApiError("bad_request")
+    prize = None
+    name = image = ""
+    if body.get("prize_id") is not None:
+        if not CHEST_GIFT_BETS:
+            raise ApiError("gift_bets_disabled")
+        prize = next((p for p in user["prizes"] if p["id"] == body.get("prize_id")), None)
+        if not prize or prize["status"] != "owned" or prize["tier"] == "bear":
+            raise ApiError("not_found")
+        if staking_prize_locked(prize):
+            raise ApiError("staking_locked", 409, until=prize.get("staking_lock_until", 0))
+        bet = money(prize["value"])
+        name, image, source = prize["name"], prize.get("image", ""), "gift"
+    else:
+        try:
+            bet = money(float(body.get("bet")))
+        except (TypeError, ValueError, OverflowError):
+            raise ApiError("bad_request")
+        source = "ton"
+    if not (CHEST_MIN_BET <= bet <= CHEST_MAX_BET):
+        raise ApiError("bad_bet", min_ton=CHEST_MIN_BET, max_ton=CHEST_MAX_BET)
+    if prize:
+        prize["status"] = "sold"
+    else:
+        if user["balance"] + 1e-9 < bet:
+            raise ApiError("insufficient_funds")
+        user["balance"] = ton(user["balance"] - bet)
+    quest_event(db, user, "mines_play")
+    user["chest"] = {
+        "bet": bet,
+        "empties": empties,
+        "bad": secrets.SystemRandom().sample(range(CHEST_CELLS), empties),
+        "opened": [],
+        "source": source,
+        "tier": prize["tier"] if prize else "",
+        "name": name,
+        "image": image,
+        "at": time.time(),
+    }
+    credit_hatcoin(user, bet)
+    boss_hit(user, bet, mode='chests')
+    return {"balance_ton": ton(user["balance"]), "hatcoin_balance": hatcoin_balance(user), "prizes": visible_prizes(user), "round": chest_view(user)}
+
+
+def pick_gift_for(payout):
+
+    best = None
+    for slug in gifts_map():
+        value = gift_floor(slug)
+        if value <= payout + 1e-9 and (best is None or value > best[0]):
+            best = (value, slug)
+    return best
+
+
+def chest_cash(user, extra=None):
+    r = user["chest"]
+    mult = chest_mult(r["empties"], len(r["opened"]))
+    payout = money(r["bet"] * mult)
+
+
+    gift = None
+    pick = pick_gift_for(payout)
+    if pick:
+        value, slug = pick
+        gift = add_prize(user, f"gift:{slug}:", gift_entry(slug)["name"], value, gift_image(slug))
+    ton_part = money(payout - gift["value"]) if gift else payout
+    user["balance"] = ton(user["balance"] + ton_part)
+    user["chest"] = None
+    label = f"Сундуки · x{mult:g} · +{payout:g}"
+    if gift:
+        label = f"Сундуки · x{mult:g} · {gift['name']} + {ton_part:g} GRAM"
+    quest_event(db, user, "mines_win", gift_awarded=bool(gift))
+    record_game(user, "chests", r["bet"], True, label, "chests:win", False, payout)
+    return {
+        **(extra or {}),
+        "finished": True,
+        "win": True,
+        "mult": mult,
+        "payout_ton": payout,
+        "ton_part": ton_part,
+        "gift": prize_view(gift) if gift else None,
+        "bad": r["bad"],
+        "balance_ton": ton(user["balance"]),
+        "prizes": visible_prizes(user),
+        "hatcoin_balance": hatcoin_balance(user),
+    }
+
+
+@route("/api/chests/open")
+def chests_open(user, body):
+    r = user.get("chest")
+    if not r:
+        raise ApiError("no_round")
+    cell = body.get("cell")
+    if isinstance(cell, bool) or not isinstance(cell, int) or not 0 <= cell < CHEST_CELLS or cell in r["opened"]:
+        raise ApiError("bad_cell")
+    if not r["opened"] and not r.get("rtp_done"):
+
+
+        r["rtp_done"] = True
+        factor = rtp_factor(user, "chests")
+        nominal_safe = (CHEST_CELLS - r["empties"]) / CHEST_CELLS
+        real_safe = min(1.0, nominal_safe * factor)
+        rng = secrets.SystemRandom()
+        safe = rng.random() < real_safe
+        if abs(factor - 1.0) < 1e-9:
+            pass
+        elif safe and cell in r["bad"]:
+            free = [c for c in range(CHEST_CELLS) if c not in r["bad"] and c != cell]
+            r["bad"][r["bad"].index(cell)] = rng.choice(free)
+        elif not safe and cell not in r["bad"]:
+            r["bad"][rng.randrange(len(r["bad"]))] = cell
+    if cell in r["bad"]:
+        user["chest"] = None
+        bear = consolation(user)
+        record_game(user, "chests", r["bet"], False, f"Сундуки · {r['empties']} пустых", "chests:lose", bool(bear))
+        return {
+            "safe": False,
+            "finished": True,
+            "win": False,
+            "cell": cell,
+            "bad": r["bad"],
+            "balance_ton": ton(user["balance"]),
+            "consolation": bear,
+            "prizes": visible_prizes(user),
+            "hatcoin_balance": hatcoin_balance(user),
+        }
+    r["opened"].append(cell)
+    quest_event(db, user, "mines_safe_open")
+    if len(r["opened"]) >= CHEST_CELLS - r["empties"]:
+        return chest_cash(user, {"safe": True, "cell": cell})
+    return {"safe": True, "finished": False, "cell": cell, "round": chest_view(user)}
+
+
+@route("/api/chests/cashout")
+def chests_cashout(user, body):
+    r = user.get("chest")
+    if not r:
+        raise ApiError("no_round")
+    if not r["opened"]:
+        raise ApiError("nothing_to_cash")
+    return chest_cash(user)
+
+
+@route("/api/sell")
+def sell(user, body):
+    prize = next((p for p in user["prizes"] if p["id"] == body.get("prize_id")), None)
+    if not prize or prize["status"] != "owned":
+        raise ApiError("not_sellable")
+    if staking_prize_locked(prize):
+        raise ApiError("staking_locked", 409, until=prize.get("staking_lock_until", 0), message="Шляпа временно заблокирована после стейкинга.")
+    payout = money(prize["value"] * prize.get("sell_rate", SELL_SHARE))
+    prize["status"] = "sold"
+    user["balance"] = ton(user["balance"] + payout)
+    return {"payout_ton": payout, "balance_ton": ton(user["balance"]), "prizes": visible_prizes(user)}
+
+
+@route("/api/sell_all")
+def sell_all(user, body):
+    total, count = 0.0, 0
+    for prize in user["prizes"]:
+        if prize["status"] == "owned" and not staking_prize_locked(prize):
+            prize["status"] = "sold"
+            total += money(prize["value"] * prize.get("sell_rate", SELL_SHARE))
+            count += 1
+    user["balance"] = ton(user["balance"] + total)
+    return {"count": count, "payout_ton": money(total), "balance_ton": ton(user["balance"]), "prizes": visible_prizes(user)}
+
+
+@route("/api/withdraw")
+def withdraw(user, body):
+    prize = next((p for p in user["prizes"] if p["id"] == body.get("prize_id")), None)
+    if not prize or prize["status"] == "sold":
+        raise ApiError("not_found")
+    if prize["status"] != "owned":
+        raise ApiError("already_requested")
+    if staking_prize_locked(prize):
+        raise ApiError("staking_locked", 409, until=prize.get("staking_lock_until", 0), message="Шляпа временно заблокирована после стейкинга.")
+    if int(user.get("stars_lock_until", 0) or 0) > time.time():
+        raise ApiError("withdraw_locked", until=int(user["stars_lock_until"]))
+    fee=prize_withdraw_fee(prize)
+    if fee:
+        if not isinstance(body.get('fee_ton'),(int,float)) or body['fee_ton']!=fee:raise ApiError('fee_changed',409,fee_ton=fee)
+        if user['balance']<fee:raise ApiError('no_funds_fee',409,fee_ton=fee)
+        user['balance']=ton(user['balance']-fee)
+    prize["status"] = "withdraw_pending"
+    key = f"{user['id']}:{prize['id']}"
+    db.setdefault("withdrawals", {})[key] = {"id": key, "uid": user["id"],
+        "prize_id": prize["id"], "status": "pending", "created": int(time.time()),
+        "updated": int(time.time()), "name": prize["name"], "image": prize.get("image", ""),
+        "value_ton": prize["value"], "tier": prize["tier"]}
+    req = db["withdrawals"][key]
+    req['withdraw_fee_ton']=fee
+    reason = auto_withdraw_block_reason(user, prize)
+    req["auto"] = "manual" if reason else "queued"
+    if reason:
+        req["auto_error"] = reason
+        req["auto_status"] = "not_eligible"
+    _send_bot_message(user["id"], "withdraw_pending", gift=prize["name"], prize=prize)
+    if req["auto"] == "manual":
+        _notify_admins_withdrawal(user, prize, req)
+    return {"prizes": visible_prizes(user), "balance_ton": ton(user["balance"]), "auto_gift": req["auto"] == "queued"}
+
+
+def ton_address_key(address):
+    text = str(address or '').strip()
+    if re.fullmatch(r'-?\d+:[0-9a-fA-F]{64}', text):
+        chain, digest = text.split(':')
+        return str(int(chain))+':'+digest.lower()
+    try:
+        import base64
+        raw = base64.urlsafe_b64decode(text+'='*(-len(text)%4))
+        if len(raw) == 36 and not raw[0] & 128:
+            return str(int.from_bytes(raw[1:2], 'big', signed=True))+':'+raw[2:34].hex()
+    except (ValueError, TypeError):
+        pass
+    return ''
+
+
+@route('/api/ton/deposit/prepare')
+def ton_deposit_prepare(user, body):
+    if not user['id'].startswith('tg'):
+        raise ApiError('telegram_required')
+    recipient = tonconnect_config()['recipient_address']
+    if not ton_address_key(recipient):
+        raise ApiError('deposit_disabled', message='Приём GRAM не настроен.')
+    try:
+        amount = float(body.get('amount'))
+    except (TypeError, ValueError):
+        raise ApiError('bad_request')
+    if not math.isfinite(amount) or not MIN_DEPOSIT <= amount <= 10000:
+        raise ApiError('bad_amount')
+    amount = money(amount)
+    now = int(time.time());orders = db.setdefault('ton_orders', {})
+    if sum(1 for r in orders.values() if r['uid'] == user['id'] and now-r['created'] < 60) >= 10:
+        raise ApiError('too_many_requests', 429)
+    order_id = secrets.token_hex(16)
+    row = {'id': order_id, 'uid': user['id'], 'address': recipient, 'amount': amount, 'memo': 'hd:'+order_id, 'created': now,
+           'deposit_promo_id': deposit_campaign_id(user), 'status': 'pending'}
+    orders[order_id] = row
+    return {'order_id': order_id, 'address': recipient, 'amount': amount, 'memo': row['memo']}
+
+
+def ton_credit_transaction(transaction):
+
+    msg = transaction.get('in_msg') or {};description = transaction.get('description') or {}
+    content = (msg.get('message_content') or {}).get('decoded') or {}
+    if (transaction.get('emulated') or not transaction.get('mc_block_seqno') or description.get('aborted') is not False
+            or msg.get('bounced') is not False or str(msg.get('opcode')) not in ('0', '0x00000000') or content.get('type') != 'text_comment'):
+        return False
+    memo = str(content.get('comment') or content.get('text') or '')
+    txid = str(transaction.get('hash') or '')
+    if not re.fullmatch(r'hd:[0-9a-f]{32}', memo) or not txid:
+        return False
+    with lock:
+        row = db.get('ton_orders', {}).get(memo[3:])
+        ledger = db.setdefault('ton_payment_events', {})
+        if not row or row['status'] == 'credited' or txid in ledger or ton_address_key(msg.get('destination')) != ton_address_key(row['address']):
+            return False
+        try:
+            value = int(msg.get('value'))
+            timestamp = int(transaction.get('now'))
+        except (TypeError, ValueError):
+            return False
+        if value != round(row['amount']*1e9) or timestamp < row['created']-120:
+            return False
+        user = db['users'].get(row['uid'])
+        if not user:
+            return False
+        user['balance'] = ton(user['balance'] + row['amount'])
+        row.update(status='credited', credited=int(time.time()), txid=txid)
+        ledger[txid] = {'uid': user['id'], 'amount': row['amount'], 'ts': int(time.time()), 'order_id': row['id']}
+        _quest_record_deposit(db, user, amount=row['amount'], payment_id='ton:'+txid)
+        credit_referral_bonus(user, row['amount'])
+        row['bonus_ton'] = credit_deposit_campaign(user, row['amount'], 'ton:'+txid, row.get('deposit_promo_id'))
+        queue_deposit_notice(user,'ton',row['amount'],'ton:'+txid,row['bonus_ton'])
+        save_db()
+    flush_db()
+    return True
+
+
+def ton_deposit_tick():
+    with lock:
+        pending = [r for r in db.get('ton_orders', {}).values() if r['status'] == 'pending' and time.time()-r['created'] < 7*86400]
+    for address in {r['address'] for r in pending}:
+        earliest = min(r['created'] for r in pending if r['address'] == address)-120
+        query = urlencode({'account': address, 'start_utime': earliest, 'limit': 1000, 'sort': 'desc'})
+        headers = {'Accept': 'application/json', 'User-Agent': 'HatDrop/1.0'}
+        req = urllib.request.Request('https://toncenter.com/api/v3/transactions?'+query, headers=headers)
+        with urllib.request.urlopen(req, timeout=10) as response:
+            transactions = json.load(response).get('transactions', [])
+        for transaction in transactions:
+            ton_credit_transaction(transaction)
+
+
+def ton_deposit_loop():
+    while True:
+        time.sleep(15)
+        if app.config.get('TESTING'):
+            continue
+        try:
+            ton_deposit_tick()
+        except Exception:
+            app.logger.warning('GRAM confirmation scan failed; pending orders will retry')
+
+
+def referral_code_benefits(user):
+    cfg = campaign_defaults()
+    item = db.get('promocodes', {}).get(user.get('ref_code', ''))
+    if item:
+        cfg = {**cfg, 'deposit_percent': 0, 'spin_count': 0}
+        for reward in promo_rewards(item):
+            if reward.get('kind') == 'deposit_bonus':
+                cfg['deposit_percent'] = reward['percent']
+            elif reward.get('kind') == 'free_spin':
+                cfg.update(spin_count=reward['count'], spin_chance=reward['chance'], spin_tier=reward['tier'])
+    return cfg
+
+
+def campaign_defaults():
+    saved = db['settings'].get('referral_campaign', {})
+    return {'deposit_percent': saved.get('deposit_percent', 10), 'spin_chance': 10,
+            'spin_count': saved.get('spin_count', 1), 'spin_tier': 'random', 'enabled': saved.get('enabled', True)}
+
+
+def campaign_code(value):
+    code = str(value or '').strip().upper()
+    if not re.fullmatch(r'[A-Z0-9_-]{3,32}', code):
+        raise ApiError('bad_code', message='Код: 3–32 латинские буквы, цифры, дефис или подчёркивание.')
+    return code
+
+
+def code_reserved(code):
+    return code in db.get('promocodes', {}) or code in PROMO_CODES or any(code == u.get('ref_code') or code in u.get('promos', []) for u in db['users'].values())
+
+
+def campaign_owner(value):
+    value = str(value or '').strip()
+    if not value:
+        return ''
+    found = [u for u in db['users'].values() if value in (u['id'], u['id'].removeprefix('tg'), u['key']) or value.lower().lstrip('@') == str(u.get('username') or '!').lower()]
+    if len(found) != 1 or not found[0]['id'].startswith('tg') or found[0].get('banned'):
+        raise ApiError('not_found', 404, message='Аккаунт владельца не найден. Укажите Telegram ID, @ник или ключ игрока.')
+    return found[0]['id']
+
+
+def campaign_validate_referral(user, code, item):
+    owner = item.get('owner_uid')
+    if not owner:
+        return
+    if not user['id'].startswith('tg'):
+        raise ApiError('telegram_required', message='Реферальный код доступен в аккаунте Telegram.')
+    if owner == user['id']:
+        raise ApiError('self_referral', message='Свой реферальный код активировать нельзя.')
+    if user.get('referral_code_claimed') or (user.get('ref_by') and user['ref_by'] != owner):
+        raise ApiError('referral_locked', message='Реферальный код уже привязан к аккаунту. Заменить его нельзя.')
+    if owner not in db['users']:
+        raise ApiError('promo_inactive')
+
+
+def free_spins_view(user):
+    return [{k: row[k] for k in ('id', 'target', 'chance', 'remaining', 'code')} for row in user.get('free_spins', []) if row.get('remaining', 0) > 0]
+
+
+def deposit_campaign_view(user):
+    rows = user.get('deposit_promos', [])
+    current = next((r for r in reversed(rows) if r['code'] == user.get('deposit_promo_code') and not r.get('used_at')), None)
+    if not current:
+        return None
+    return {'code': current['code'], 'percent': current['percent'], 'once': True, 'activated': True}
+
+
+def deposit_campaign_id(user):
+    current = deposit_campaign_view(user)
+    return next((r['id'] for r in user.get('deposit_promos', []) if current and r['code'] == current['code'] and not r.get('used_at')), '')
+
+
+def credit_deposit_campaign(user, amount, payment_id, promo_id):
+
+    if not promo_id or amount <= 0:
+        return 0
+    ledger = db.setdefault('deposit_bonus_events', {})
+    if payment_id in ledger:
+        return 0
+    row = next((r for r in user.get('deposit_promos', []) if r['id'] == promo_id), None)
+    if not row or row.get('used_at') or row.get('referral') and user.get('referral_deposit_bonus_used'):
+        return 0
+    bonus = ton(amount * row['percent'] / 100)
+    row.update(used_at=int(time.time()), payment_id=payment_id, principal=amount, bonus=bonus)
+    if row.get('referral'):
+        user['referral_deposit_bonus_used'] = True
+    user['balance'] = ton(user['balance'] + bonus)
+    ledger[payment_id] = {'uid': user['id'], 'code': row['code'], 'amount': bonus, 'principal': amount, 'ts': int(time.time())}
+    item = db.get('promocodes', {}).get(row['code'])
+    if item:
+        item['paid_uses'] = item.get('paid_uses', 0) + 1
+        item['deposited_ton'] = ton(item.get('deposited_ton', 0) + amount)
+        item['bonus_ton'] = ton(item.get('bonus_ton', 0) + bonus)
+    return bonus
+
+
+@route('/api/promo/deposit')
+def deposit_promo_apply(user, body):
+    code = campaign_code(body.get('code'))
+    item = db.get('promocodes', {}).get(code)
+    if not item or not any(r.get('kind') == 'deposit_bonus' for r in promo_rewards(item)):
+        raise ApiError('not_found', 404, message='Это не промокод на пополнение.')
+    if code in user.get('promos', []) or any(r['code'] == code and not r.get('used_at') for r in user.get('deposit_promos', [])):
+        row = next((r for r in user.get('deposit_promos', []) if r['code'] == code and not r.get('used_at')), None)
+        if not row:
+            raise ApiError('promo_used', message='Бонус этого промокода уже использован.')
+        user['deposit_promo_code'] = code
+        return {'deposit_promo': deposit_campaign_view(user), 'free_spins': free_spins_view(user), 'referral': referral_view(user)}
+    result = promo(user, body)
+    result.update(deposit_promo=deposit_campaign_view(user), free_spins=free_spins_view(user), referral=referral_view(user))
+    return result
+
+
+@route('/api/promo/deposit/clear')
+def deposit_promo_clear(user, body):
+    user['deposit_promo_code'] = ''
+    return {'deposit_promo': None}
+
+
+@route('/api/referral/code/check')
+def referral_code_check(user, body):
+    code = campaign_code(body.get('code'))
+    own = db.get('promocodes', {}).get(code, {})
+    return {'code': code, 'available': code == user.get('ref_code') and not own.get('deleted') or not code_reserved(code)}
+
+
+@route('/api/referral/code/create')
+def referral_code_create(user, body):
+    if not user['id'].startswith('tg'):
+        raise ApiError('telegram_required')
+    if user.get('ref_code'):
+        raise ApiError('referral_code_exists', message='Личный промокод уже создан. Изменить его нельзя.')
+    cfg = campaign_defaults()
+    if not cfg['enabled']:
+        raise ApiError('disabled', message='Создание реферальных промокодов временно закрыто.')
+    code = campaign_code(body.get('code'))
+    if code_reserved(code):
+        raise ApiError('promo_exists', message='Этот код уже занят.')
+    rewards = []
+    if cfg['deposit_percent']:
+        rewards.append({'kind': 'deposit_bonus', 'percent': cfg['deposit_percent']})
+    if cfg['spin_count']:
+        rewards.append({'kind': 'free_spin', 'chance': cfg['spin_chance'], 'count': cfg['spin_count'], 'tier': cfg['spin_tier']})
+    rewards = clean_promo_rewards(rewards, campaign=True)
+    db.setdefault('promocodes', {})[code] = {'kind': 'multi', 'rewards': rewards, 'conditions': [], 'limit': 0, 'uses': 0, 'active': True,
+                                           'owner_uid': user['id'], 'personal_referral': True, 'created': int(time.time())}
+    user.update(ref_code=code, ref_created=True)
+    return {'referral': referral_view(user)}
+
+
+@route('/api/admin/referral/defaults')
+def admin_referral_defaults(user, body):
+    require_admin(user)
+    if body.get('save'):
+        cfg = body.get('config')
+        if not isinstance(cfg, dict) or type(cfg.get('enabled')) is not bool:
+            raise ApiError('bad_request')
+        try:
+            percent, chance, count = float(cfg['deposit_percent']), int(cfg['spin_chance']), int(cfg['spin_count'])
+        except (ValueError, TypeError, KeyError):
+            raise ApiError('bad_request')
+        if not math.isfinite(percent) or not 0 <= percent <= 100 or not 1 <= chance <= 70 or not 0 <= count <= 20 or cfg.get('spin_tier') not in TIERS or not (percent or count):
+            raise ApiError('bad_request', message='Проверьте процент, шанс 1–70%, число прокрутов 0–20 и вид шляпы.')
+        db['settings']['referral_campaign'] = {**cfg, 'deposit_percent': percent, 'spin_chance': 10, 'spin_tier': 'random', 'spin_count': count}
+    return {'config': campaign_defaults()}
+
+
+@route('/api/spin/free')
+def free_spin(user, body):
+    require_section('upgrade')
+    ticket = next((r for r in user.get('free_spins', []) if r['id'] == body.get('ticket_id') and r.get('remaining', 0) > 0), None)
+    if not ticket:
+        raise ApiError('free_spin_used', 409, message='Этот бесплатный прокрут уже использован.')
+    target, chance = ticket['target'], ticket['chance'] / 100
+    ticket['remaining'] -= 1
+    win = secrets.randbelow(1_000_000) < min(1, chance * rtp_factor(user, 'upgrade')) * 1_000_000
+    if win:
+        add_prize(user, target['tier'], target['name'], target['value'], target['image'])
+    record_game(user, 'upgrade', 0, win, target['name'], target['image'] or 'tier:'+target['tier'], False, target['value'] if win else 0)
+    user['history'][0]['free'] = True
+    return {'win': win, 'balance_ton': ton(user['balance']), 'hatcoin_balance': hatcoin_balance(user), 'consolation': None, 'free_spins': free_spins_view(user), 'free': True}
+
+
+def promo_rewards(item):
+    return item.get("rewards") if isinstance(item.get("rewards"), list) else [item]
+
+
+def clean_promo_conditions(raw):
+    if not isinstance(raw, list) or len(raw) > 10:
+        raise ApiError("bad_request", 400, message="Можно добавить до 10 условий.")
+    out = []
+    for c in raw:
+        if not isinstance(c, dict) or c.get("kind") not in ("turnover", "level", "deposit"):
+            raise ApiError("bad_request", 400, message="Выберите вид условия.")
+        try:
+            minimum = float(c.get("min"))
+            hours = float(c.get("hours", 0)) if c["kind"] == "deposit" else 0
+        except (TypeError, ValueError):
+            raise ApiError("bad_request")
+        if isinstance(c.get("min"), bool) or not math.isfinite(minimum) or not 0 < minimum <= 1_000_000_000 or not math.isfinite(hours) or not 0 <= hours <= 87600:
+            raise ApiError("bad_request", 400, message="Укажите положительный порог и корректный период.")
+        if c["kind"] == "level" and (minimum != int(minimum) or minimum > level_cfg()["count"]):
+            raise ApiError("bad_request", 400, message="Укажите существующий целый уровень.")
+        out.append({"kind": c["kind"], "min": minimum, "hours": hours})
+    return out
+
+
+def clean_promo_rewards(raw, campaign=False):
+    if not isinstance(raw, list) or not 1 <= len(raw) <= 20:
+        raise ApiError("bad_request", 400, message="Добавьте от 1 до 20 наград.")
+    out = []
+    for r in raw:
+        if not isinstance(r, dict):
+            raise ApiError("bad_request")
+        kind = r.get("kind")
+        if campaign and kind == 'deposit_bonus':
+            try:
+                percent = float(r.get('percent'))
+            except (TypeError, ValueError):
+                raise ApiError('bad_request')
+            if not math.isfinite(percent) or not 0 < percent <= 100 or any(x['kind'] == 'deposit_bonus' for x in out):
+                raise ApiError('bad_request', message='Один бонус пополнения на код, от 0 до 100%.')
+            out.append({'kind': kind, 'percent': percent, 'name': f'+{percent:g}% к первому пополнению'})
+        elif campaign and kind == 'free_spin':
+            try:
+                chance, count = int(r.get('chance', 10)), int(r.get('count', 1))
+            except (TypeError, ValueError):
+                raise ApiError('bad_request')
+            if not 1 <= chance <= 70 or not 1 <= count <= 100 or chance != float(r.get('chance', 10)) or count != float(r.get('count', 1)) or isinstance(r.get('chance'), bool) or isinstance(r.get('count'), bool):
+                raise ApiError('bad_request')
+            target = resolve_target({}, 'random')
+            out.append({'kind': kind, 'tier': 'random', 'gift': '', 'model': '', 'chance': 10, 'count': count, 'target': target, 'name': f'{count} Free Spin Coins'})
+        elif kind == 'free_coin':
+            amount = finite_free_coin_amount(r.get('amount'))
+            out.append({'kind': kind, 'amount': amount, 'name': f'{amount} монет фриспина'})
+        elif kind in ("balance", "hatcoin"):
+            try:
+                amount = float(r.get("amount"))
+            except (TypeError, ValueError):
+                raise ApiError("bad_request")
+            if not math.isfinite(amount) or not 0 < amount <= 100000:
+                raise ApiError("bad_request", 400, message="Проверьте сумму награды.")
+            amount = money(amount) if kind == "balance" else round(amount, 6)
+            if amount <= 0:
+                raise ApiError("bad_request", 400, message="Слишком маленькая сумма награды.")
+            out.append({"kind": kind, "amount": amount})
+        elif kind == "item":
+            wid = str(r.get("weapon") or "")
+            if wid not in weapons_lib.WEAPONS or weapons_lib.WEAPONS[wid]["default"]:
+                raise ApiError("bad_request", 400, message="Выберите предмет.")
+            out.append({"kind": kind, "weapon": wid, "name": weapons_lib.WEAPONS[wid]["name"]})
+        elif kind == "gift":
+            slug, model = str(r.get("gift") or ""), str(r.get("model") or "")
+            gift_price(slug, model)
+            out.append({"kind": kind, "gift": slug, "model": model, "name": gift_entry(slug)["name"]})
+        else:
+            raise ApiError("bad_request", 400, message="Выберите вид награды.")
+    return out
+
+
+def verified_promo_deposits(user):
+
+    rows = {str(k): v for k, v in db.get("quest_deposit_events", {}).items() if v.get("uid") == user["id"]}
+    for key, o in db.get('ton_payment_events', {}).items():
+        if o.get('uid') == user['id']:
+            rows.setdefault('ton:'+key, o)
+    for key, o in db.get("stars_orders", {}).items():
+        if o.get("uid") == user["id"] and o.get("status") == "credited":
+            rows.setdefault("stars:" + str(o.get("charge_id") or key), {"amount": o.get("amount", 0), "ts": o.get("credited", 0)})
+    for key, o in db.get("crypto_orders", {}).items():
+        if o.get("uid") == user["id"] and o.get("status") == "credited" and not o.get("testnet"):
+            rows.setdefault("crypto:" + str(o.get("id") or key), {"amount": o.get("amount", 0), "ts": o.get("credited", 0)})
+    for key, o in db.get("relayer", {}).get("events", {}).items():
+        if o.get("uid") == user["id"] and o.get("status") == "credited":
+            rows.setdefault("nft:" + str(key), {"amount": o.get("price_ton", 0), "ts": o.get("at", 0)})
+    return list(rows.values())
+
+
+def promo_unmet(user, conditions):
+    now = time.time()
+    deposits = None
+    missing = []
+    for c in conditions:
+        kind, minimum, hours = c["kind"], c["min"], c.get("hours", 0)
+        if kind == "level":
+            actual = level_info(user["turnover"])["level"]
+            label = "Уровень"
+        elif kind == "turnover":
+            actual = user["turnover"]
+            label = "Оборот, GRAM"
+        else:
+            if deposits is None:
+                deposits = verified_promo_deposits(user)
+            actual = sum(float(r.get("amount", 0)) for r in deposits if (not hours or now-hours*3600 <= r.get("ts", 0)) and r.get("ts", 0) <= now)
+            label = "Пополнения за всё время, GRAM" if not hours else f"Пополнения за последние {hours:g} ч., GRAM"
+        if actual + 1e-9 < minimum:
+            missing.append({"kind": kind, "min": minimum, "actual": ton(actual), "hours": hours, "label": label})
+    return missing
+
+
+@route("/api/promo")
+def promo(user, body):
+    code = str(body.get("code", "")).strip().upper()
+    item = db.setdefault("promocodes", {}).get(code)
+    if item is None:
+        raise ApiError("not_found", 404)
+    if item.get('deleted') or not item.get("active", True):
+        raise ApiError("promo_inactive")
+    if code in user.get("promos", []):
+        raise ApiError("promo_used")
+    if item.get("limit", 0) and item.get("uses", 0) >= item["limit"]:
+        raise ApiError("promo_exhausted")
+    missing = promo_unmet(user, item.get("conditions", []))
+    if missing:
+        raise ApiError("promo_conditions", 400, message="Не выполнены условия: " + "; ".join(f"{c['label']}: нужно {c['min']:g}, сейчас {c['actual']:g}" for c in missing), conditions=missing)
+    campaign_validate_referral(user, code, item)
+    rewards = clean_promo_rewards(promo_rewards(item), campaign=True)
+    prepared = [(r, resolve_target(r, "gift") if r["kind"] == "gift" else None) for r in rewards]
+
+    updated = copy.deepcopy(user)
+    for r, _ in sorted(prepared, key=lambda pair: bool(weapons_lib.required_theme(pair[0].get("weapon", "")))):
+        if r["kind"] == "item":
+            grant_weapon(updated, r["weapon"])
+    summary = []
+    amount_ton = 0
+    welcome_offset = 1 if item.get('owner_uid') and updated.get('ref_join_coin_granted') else 0
+    for r, target in prepared:
+        if r["kind"] == "balance":
+            updated["balance"] = ton(updated["balance"] + r["amount"])
+            amount_ton += r["amount"]
+            name = f"+{r['amount']:g} GRAM"
+        elif r["kind"] == "hatcoin":
+            updated["hatcoin_units"] = updated.get("hatcoin_units", 0) + round(r["amount"] * HATCOIN_UNITS)
+            name = f"+{r['amount']:g} HatCoin"
+        elif r['kind'] == 'free_coin':
+            updated['free_spin_coins'] = free_coin_balance(updated) + r['amount']
+            name = r['name']
+        elif r['kind'] == 'deposit_bonus':
+            updated.setdefault('deposit_promos', []).append({'id': secrets.token_hex(10), 'code': code, 'percent': r['percent'], 'referral': bool(item.get('owner_uid')), 'created': int(time.time())})
+            updated['deposit_promo_code'] = code
+            name = r['name']
+        elif r['kind'] == 'free_spin':
+
+            deduction = min(welcome_offset, r['count'])
+            welcome_offset -= deduction
+            updated['free_spin_coins'] = free_coin_balance(updated) + r['count'] - deduction
+            if item.get('owner_uid'):
+                updated['ref_join_coin_granted'] = True
+            name = f"{r['count']} Free Spin Coins"
+        elif r["kind"] == "gift":
+            add_prize(updated, target["tier"], target["name"], target["value"], target["image"])
+            name = target["name"]
+        else:
+            name = r["name"]
+        summary.append({"kind": r["kind"], "name": name})
+    if item.get('owner_uid'):
+        updated.update(ref_by=item['owner_uid'], referral_code_claimed=code)
+    updated.setdefault("promos", []).append(code)
+    user.clear()
+    user.update(updated)
+    item["uses"] = item.get("uses", 0) + 1
+    return {"balance_ton": ton(user["balance"]), "amount_ton": ton(amount_ton), "prizes": visible_prizes(user),
+            "weapons": weapons_lib.owned(user), "gift": summary[0]["name"] if len(summary) == 1 and not amount_ton else "",
+            "rewards": summary, "state": full_state(user)}
+
+
+EMOJI_TAG_RE = re.compile(r"<tg-emoji emoji-id=\"[0-9]+\">(.*?)</tg-emoji>", re.S)
+
+
+def _strip_custom_emoji(text, markup):
+
+    text = EMOJI_TAG_RE.sub(lambda m: m.group(1), text)
+    if markup:
+        markup = {"inline_keyboard": [[{k: v for k, v in b.items() if k != "icon_custom_emoji_id"} for b in row]
+                                      for row in markup.get("inline_keyboard", [])]}
+    return text, markup
+
+
+def _send_tg_async(uid, message, reply_markup=None, html=False):
+    if not BOT_TOKEN or not str(uid).startswith("tg"):
+        return
+    try:
+        chat = int(str(uid)[2:])
+    except ValueError:
+        return
+
+    def post(text, markup):
+        extra = {"reply_markup": markup} if markup else {}
+        if html:
+            extra.update(parse_mode="HTML", link_preview_options={"is_disabled": True})
+        tg_api("sendMessage", chat_id=chat, text=text, **extra)
+
+    def job():
+        try:
+            post(message, reply_markup)
+        except Exception as e:
+            print("Telegram notification failed:", str(e), flush=True)
+            if html and ("tg-emoji" in message or "icon_custom_emoji_id" in json.dumps(reply_markup or {})):
+                try:
+                    post(*_strip_custom_emoji(message, reply_markup))
+                except Exception as e2:
+                    print("Telegram fallback failed:", str(e2), flush=True)
+    threading.Thread(target=job, daemon=True).start()
+
+
+def withdrawal_record(row):
+    u = db["users"].get(row["uid"], {})
+    return {**row, "username": u.get("username", ""),
+            "user_id": row["uid"], "first_name": u.get("first_name", ""),
+            "telegram_id": str(row["uid"])[2:] if str(row["uid"]).startswith("tg") else ""}
+
+
+
+BACKUP_TG_HOURS = float(os.environ.get("BACKUP_TG_HOURS", "0"))
+
+
+def storage_info():
+    persistent = bool(DATABASE_URL or os.environ.get("SQLITE_PATH") or os.environ.get("DB_PATH"))
+    return {"kind": "postgres" if DATABASE_URL else "sqlite", "persistent": persistent, "conflict": bool(_save_meta["conflict"]),
+            "last_saved": _save_meta["saved"], "bytes": _save_meta["bytes"], "users": _save_meta["users"], "rev": _save_meta["rev"],
+            "path": "" if DATABASE_URL else SQLITE_PATH,
+            "fallback": _db_state["fallback"], "error": _db_state["error"]}
+
+
+def backup_bytes():
+    with lock:
+        text = json.dumps({"format": "hatdrop-backup", "version": 1, "created": int(time.time()), "db": db}, ensure_ascii=False)
+    return gzip.compress(text.encode("utf-8"))
+
+
+def restore_backup(raw):
+
+    try:
+        raw = gzip.decompress(raw) if raw[:2] == b"\x1f\x8b" else raw
+        data = json.loads(raw.decode("utf-8"))
+        new = data["db"] if data.get("format") == "hatdrop-backup" else data
+        if not isinstance(new, dict) or not isinstance(new.get("users"), dict):
+            raise ValueError("no users")
+    except Exception:
+        raise ApiError("bad_backup", 400, message="Файл не похож на резервную копию HatDrop.")
+    with lock:
+        try:
+            store_put("db_before_restore", DB_PATH + ".before", json.dumps(db, ensure_ascii=False))
+        except Exception as exc:
+            print("pre-restore snapshot failed:", exc, flush=True)
+        db.clear()
+        db.update(new)
+        for key, default in (("users", {}), ("prices", {}), ("settings", {}), ("promocodes", {}), ("withdrawals", {}), ("quests", {})):
+            db.setdefault(key, default)
+        ensure_analytics(db)
+        count = len(db["users"])
+    flush_db()
+    try:
+        flush_quests()
+    except Exception as exc:
+        print("quest flush after restore failed:", exc, flush=True)
+    return count
+
+
+def tg_send_document(chat_id, filename, data, caption=""):
+    boundary = "----hatdrop" + secrets.token_hex(8)
+    parts = []
+    for name, value in (("chat_id", str(chat_id)), ("caption", caption)):
+        parts.append(f'--{boundary}\r\nContent-Disposition: form-data; name="{name}"\r\n\r\n{value}\r\n'.encode("utf-8"))
+    parts.append((f'--{boundary}\r\nContent-Disposition: form-data; name="document"; filename="{filename}"\r\n'
+                  f'Content-Type: application/gzip\r\n\r\n').encode() + data + b"\r\n")
+    parts.append(f"--{boundary}--\r\n".encode())
+    req = urllib.request.Request(f"https://api.telegram.org/bot{BOT_TOKEN}/sendDocument", data=b"".join(parts),
+                                 headers={"Content-Type": f"multipart/form-data; boundary={boundary}"}, method="POST")
+    with urllib.request.urlopen(req, timeout=60) as resp:
+        out = json.load(resp)
+    if not out.get("ok"):
+        raise ValueError(out.get("description", "telegram error"))
+    return out.get("result") or {}
+
+
+def send_backup_to_owner(force=True):
+
+    if not BOT_TOKEN:
+        return False
+    with lock:
+        if not db.get("users"):
+            return False
+    data = backup_bytes()
+    if len(data) > 49 * 1024 * 1024:
+        return False
+    with lock:
+        digest = hashlib.sha1(json.dumps(db.get("users", {}), sort_keys=True).encode()).hexdigest()
+    if not force and digest == _backup_state.get("hash"):
+        return False
+    msg = tg_send_document(OWNER_ADMIN_ID, time.strftime("hatdrop-backup-%Y%m%d-%H%M.json.gz"), data,
+                           "Резервная копия HatDrop (закреплена; сервер сам восстановится из неё, если база окажется пустой). Вручную: отправьте файл боту с подписью /restore")
+    _backup_state["hash"] = digest
+    try:
+        if msg.get("message_id"):
+            tg_api("pinChatMessage", chat_id=int(OWNER_ADMIN_ID), message_id=msg["message_id"], disable_notification=True)
+    except Exception as exc:
+        print("pin backup failed:", exc, flush=True)
+    return True
+
+
+_backup_state = {"hash": None, "restored": 0}
+
+
+def auto_restore_if_empty():
+
+    if os.environ.get("AUTO_RESTORE") != "1" or not BOT_TOKEN or db.get("users") or db.get("settings", {}).get("reset_at"):
+        return 0
+    try:
+        pinned = (tg_api("getChat", chat_id=int(OWNER_ADMIN_ID)) or {}).get("pinned_message") or {}
+        doc = pinned.get("document") or {}
+        if not str(doc.get("file_name") or "").startswith("hatdrop-backup"):
+            return 0
+        path = tg_api("getFile", file_id=doc["file_id"])["file_path"]
+        with urllib.request.urlopen(f"https://api.telegram.org/file/bot{BOT_TOKEN}/{path}", timeout=30) as resp:
+            raw = resp.read()
+        count = restore_backup(raw)
+        _backup_state["restored"] = count
+        print(f"AUTO-RESTORE: база была пустой, восстановлено игроков: {count}", flush=True)
+        return count
+    except Exception as exc:
+        print("auto-restore failed:", exc, flush=True)
+        return 0
+
+
+def _boot_report():
+
+    if os.environ.get("BOOT_REPORT") != "1":
+        return
+    time.sleep(25)
+    if not BOT_TOKEN:
+        return
+    try:
+        info = storage_info()
+        with lock:
+            users = len(db.get("users", {}))
+        lines = ["Сервер запущен.", f"База: {'PostgreSQL' if info['kind'] == 'postgres' else 'SQLite'}, игроков: {users}"]
+        if _backup_state["restored"]:
+            lines.append(f"База была пустой - восстановлена из закреплённой копии ({_backup_state['restored']} игроков).")
+        if info["kind"] == "sqlite" and not info["persistent"]:
+            lines.append("Внимание: диск не постоянный. Копии базы приходят сюда автоматически, но лучше подключить Postgres или диск.")
+        tg_api("sendMessage", chat_id=int(OWNER_ADMIN_ID), text="\n".join(lines))
+    except Exception as exc:
+        print("boot report failed:", exc, flush=True)
+
+
+def _tg_backup_loop():
+    time.sleep(180)
+    while True:
+        try:
+            if BACKUP_TG_HOURS > 0:
+                send_backup_to_owner(force=False)
+        except Exception as e:
+            print("Telegram backup failed:", e, flush=True)
+        time.sleep(max(600, BACKUP_TG_HOURS * 3600))
+
+
+@route("/api/admin/backup/download")
+def admin_backup_download(user, body):
+    require_admin(user)
+    import base64
+    return {"filename": time.strftime("hatdrop-backup-%Y%m%d-%H%M.json.gz"), "data": base64.b64encode(backup_bytes()).decode()}
+
+
+@route("/api/admin/backup/restore")
+def admin_backup_restore(user, body):
+    if str(user["id"]) != "tg" + OWNER_ADMIN_ID:
+        raise ApiError("forbidden", 403, message="Восстановление доступно только владельцу.")
+    import base64
+    try:
+        raw = base64.b64decode(str(body.get("data") or ""), validate=True)
+    except Exception:
+        raise ApiError("bad_backup", 400, message="Файл не прочитан.")
+    return {"ok": True, "users": restore_backup(raw)}
+
+
+@route("/api/admin/backup/send")
+def admin_backup_send(user, body):
+    require_admin(user)
+    if not BOT_TOKEN:
+        raise ApiError("bot_token_missing", 400, message="Не задан токен бота.")
+    return {"ok": send_backup_to_owner()}
+
+
+MEDIA_DIR = os.environ.get("MEDIA_DIR") or os.path.join(os.path.dirname(SQLITE_PATH), "media")
+
+
+@route("/api/admin/media/upload")
+def admin_media_upload(user, body):
+    require_admin(user)
+    try:
+        return media_assets.store_raster(body.get("data"), MEDIA_DIR)
+    except ValueError as error:
+        raise ApiError("bad_image", 400, message=str(error))
+
+
+@app.get("/media/<name>")
+def public_media(name):
+    if not media_assets.NAME.fullmatch(name):
+        return ("", 404)
+    response = send_from_directory(MEDIA_DIR, name, max_age=31536000)
+    response.headers["X-Content-Type-Options"] = "nosniff"
+    return response
+
+
+
+POST_LINK_RE = re.compile(r"^(?:https?://)?(?:t|telegram)\.me/(?:(c)/(\d{4,15})|([A-Za-z][A-Za-z0-9_]{3,31}))(?:/\d+)?/(\d+)(?:[/?#].*)?$")
+_broadcast_busy = threading.Event()
+
+
+def parse_post_link(link):
+
+    m = POST_LINK_RE.match(str(link or "").strip())
+    if not m:
+        raise ApiError("bad_post_link", 400, message="Ссылка должна вести на пост канала: https://t.me/канал/123")
+    chat = int("-100" + m.group(2)) if m.group(1) else "@" + m.group(3)
+    return chat, int(m.group(4))
+
+
+def broadcast_recipients(audience, raw_list):
+    with lock:
+        users = [u for u in db["users"].values() if str(u["id"]).startswith("tg") and not u.get("demo")]
+        if audience == "all":
+            return [u["id"] for u in users]
+        wanted = [x.strip().lstrip("@").lower() for x in re.split(r"[\s,;]+", str(raw_list or "")) if x.strip()]
+        if not wanted:
+            raise ApiError("bad_request", 400, message="Укажите получателей: @username или Telegram ID через пробел.")
+        found, seen = [], set()
+        for u in users:
+            keys = {str(u["id"]).lower(), str(u["id"])[2:], str(u.get("username") or "").lower(), str(u.get("key") or "").lower()}
+            if keys & set(wanted) and u["id"] not in seen:
+                seen.add(u["id"]); found.append(u["id"])
+        return found
+
+
+def _broadcast_send_one(uid, source):
+    chat = int(str(uid)[2:])
+    with lock:
+        recipient = db["users"].get(uid, {})
+        recipient_name = recipient.get("first_name") or recipient.get("username") or "друг"
+    message = source.get("message")
+    payload = message_payload({"broadcast": message}, "broadcast", source.get("app_url", ""), recipient_name) if message else {"text": source.get("html", "")}
+    content, markup = payload["text"], payload.get("reply_markup")
+    fallback = False
+    for attempt in range(3):
+        try:
+            if source["kind"] == "post":
+                tg_api("copyMessage", chat_id=chat, from_chat_id=source["chat"], message_id=source["message_id"])
+            else:
+                extra = {"parse_mode": "HTML"}
+                if markup:
+                    extra["reply_markup"] = markup
+                if source.get("photo"):
+                    tg_api("sendPhoto", chat_id=chat, photo=source["photo"], caption=content, **extra)
+                else:
+                    tg_api("sendMessage", chat_id=chat, text=content, link_preview_options={"is_disabled": True}, **extra)
+            return "sent"
+        except Exception as exc:
+            error = str(exc)
+            retry = re.search(r"retry after (\d+)", error)
+            if retry and attempt == 0:
+                time.sleep(min(30, int(retry.group(1)) + 1))
+                continue
+            if not fallback and any(token in error.lower() for token in ("emoji", "premium")) and ("<tg-emoji" in content or "icon_custom_emoji_id" in str(markup)):
+                content, markup = _strip_custom_emoji(content, markup)
+                fallback = True
+                continue
+            if "blocked" in error or "deactivated" in error or "chat not found" in error or "Forbidden" in error:
+                return "blocked"
+            return "failed:" + error[:120]
+    return "failed"
+
+
+def _broadcast_worker(bid, recipients, source):
+    try:
+        for uid in recipients:
+            result = _broadcast_send_one(uid, source)
+            with lock:
+                row = db["broadcasts"][bid]
+                if result == "sent":
+                    row["sent"] += 1
+                elif result == "blocked":
+                    row["blocked"] += 1
+                else:
+                    row["failed"] += 1
+                    row["last_error"] = result
+                    if row["failed"] >= 5 and row["sent"] == 0:
+                        row["error"] = result
+                        break
+                save_db()
+            time.sleep(0.05)
+    finally:
+        with lock:
+            row = db["broadcasts"][bid]
+            row["status"] = "done"
+            row["finished"] = int(time.time())
+            save_db()
+        _broadcast_busy.clear()
+
+
+def _broadcast_source(body):
+    if str(body.get("link") or "").strip():
+        chat, mid = parse_post_link(body["link"])
+        return {"kind": "post", "chat": chat, "message_id": mid, "label": str(body["link"]).strip()[:200]}
+    text = str(body.get("text") or "").strip()
+    photo = str(body.get("photo") or "").strip()
+    if photo.startswith("/media/"):
+        name = photo.removeprefix("/media/")
+        if not media_assets.NAME.fullmatch(name) or not os.path.isfile(os.path.join(MEDIA_DIR, name)):
+            raise ApiError("bad_image", 400, message="Загрузите фото заново.")
+        photo = request.host_url.rstrip("/") + photo
+    elif photo and not valid_url(photo):
+        raise ApiError("bad_image", 400, message="Используйте HTTPS-ссылку или загрузите фото.")
+    if not text and not photo:
+        raise ApiError("bad_request", 400, message="Добавьте текст, фото или ссылку на пост.")
+    try:
+        message = validate_message({"text": text or "📷", "buttons": body.get("buttons", [])})
+    except ValueError as error:
+        raise ApiError("bad_request", 400, message="Проверьте текст, ссылки, кнопки и ID эмодзи: " + str(error))
+    if not text:
+        message["text"] = ""
+    app_url = _bot_app_url()
+    if any(b["action"] == "app" for b in message["buttons"]) and not valid_url(app_url):
+        raise ApiError("app_https_url_required", 400, message="Для кнопки игры укажите HTTPS-адрес мини-приложения в настройках бота.")
+    preview = message_payload({"broadcast": message}, "broadcast", app_url)
+    visible_text = html.unescape(re.sub(r"<[^>]+>", "", preview["text"]))
+    worst = message_payload({"broadcast": message}, "broadcast", app_url, "😀" * 120)["text"]
+    worst_size = len(html.unescape(re.sub(r"<[^>]+>", "", worst)).encode("utf-16-le")) // 2
+    if worst_size > (1024 if photo else 4096):
+        raise ApiError("caption_too_long", 400, message="Текст с подставленным именем слишком длинный. Сократите его или число вставок {name}.")
+    if photo and len(visible_text.encode("utf-16-le")) // 2 > 900:
+        raise ApiError("caption_too_long", 400, message="Сократите подпись к фото до 900 символов, чтобы осталось место для имени получателя.")
+    return {"kind": "photo" if photo else "text", "html": preview["text"], "message": message,
+            "app_url": app_url, "photo": photo, "label": text[:80] or "Фото"}
+
+
+@admin_io("/api/admin/broadcast/test")
+def admin_broadcast_test(body):
+    with lock:
+        user, _ = current_user()
+        uid = user["id"]
+    source = _broadcast_source(body)
+    result = _broadcast_send_one(uid, source)
+    if result != "sent":
+        raise ApiError("broadcast_failed", 409, message="Не удалось отправить тест (бот должен иметь доступ к каналу и вы должны были написать боту): " + result)
+    return {"ok": True}
+
+
+@route("/api/admin/broadcast/start")
+def admin_broadcast_start(user, body):
+    require_admin(user)
+    if not BOT_TOKEN:
+        raise ApiError("bot_token_missing", 400, message="Не задан токен бота.")
+    if _broadcast_busy.is_set():
+        raise ApiError("broadcast_running", 409, message="Другая рассылка ещё идёт.")
+    audience = "all" if body.get("audience") == "all" else "list"
+    source = _broadcast_source(body)
+    recipients = broadcast_recipients(audience, body.get("list"))
+    if not recipients:
+        raise ApiError("bad_request", 400, message="Получатели не найдены.")
+    bid = secrets.token_hex(6)
+    rows = db.setdefault("broadcasts", {})
+    rows[bid] = {"id": bid, "created": int(time.time()), "by": user["id"], "audience": audience, "total": len(recipients),
+                 "sent": 0, "blocked": 0, "failed": 0, "status": "running", "label": source["label"], "kind": source["kind"]}
+    for old in sorted(rows, key=lambda k: rows[k]["created"])[:-30]:
+        del rows[old]
+    _broadcast_busy.set()
+    threading.Thread(target=_broadcast_worker, args=(bid, recipients, source), daemon=True).start()
+    return {"id": bid, "total": len(recipients)}
+
+
+@route("/api/admin/broadcast/list")
+def admin_broadcast_list(user, body):
+    require_admin(user)
+    rows = sorted(db.get("broadcasts", {}).values(), key=lambda r: r["created"], reverse=True)
+    return {"rows": rows[:20], "users": sum(1 for u in db["users"].values() if str(u["id"]).startswith("tg") and not u.get("demo"))}
+
+
+
+HALL_GEAR = ['hall_emerald_scepter', 'hall_host_axe', 'hall_ember_poker']
+SHOP_LIMIT = 100
+SHOP_CURRENCIES = ("ton", "hatcoin")
+WEAPON_IMAGES = {"axe": "/images/axe-icon.webp", "staff": "/images/staff-icon.webp", "skeleton": "/static/weapons/skeleton-icon.png", "basement_wrench": "/static/weapons/basement-wrench-v2.png?v=2"}
+
+
+def weapon_image(wid):
+    if wid in ('hall_emerald_scepter', 'hall_ember_poker'):
+        return f'/static/weapons/{wid}-icon-v2.png?v=2'
+    if wid == "theme_hall":
+        return "/static/themes/hall.png?v=1"
+    if weapons_lib.WEAPONS.get(wid, {}).get("kind") == "theme":
+        version = 2 if wid == "theme_basement" else 1
+        return f"/static/themes/{wid[len('theme_'):]}.webp?v={version}"
+    return WEAPON_IMAGES.get(wid) or f"/static/weapons/{wid}-icon.png"
+
+
+def shop_doc():
+    doc = db.setdefault("shop", {})
+    doc.setdefault("offers", {})
+    return doc
+
+
+def shop_reward_view(r):
+    kind = r["kind"]
+    if kind == 'free_coin':
+        return {'kind': kind, 'name': f"{int(r['amount'])} монет фриспина", 'image': '/static/free-coins/coin.png'}
+    if kind == "ton":
+        return {"kind": kind, "name": f"{r['amount']:g} GRAM", "image": "/images/gram.webp"}
+    if kind == "hatcoin":
+        return {"kind": kind, "name": f"{r['amount']:g} HatCoin", "image": "/images/hatcoin.webp?v=2"}
+    if kind == "weapon":
+        w = weapons_lib.WEAPONS[r["weapon"]]
+        return {"kind": kind, "name": w["name"], "image": weapon_image(r["weapon"]), "weapon": r["weapon"], "rarity": w["rarity"]}
+    return {"kind": kind, "name": r.get("name", ""), "image": r.get("image", ""), "value_ton": r.get("value", 0)}
+
+
+def hidden_theme_offer(offer, user):
+    wid = offer.get("reward", {}).get("weapon", "")
+    return weapons_lib.WEAPONS.get(wid, {}).get("kind") == "theme" and wid in hidden_for(user)
+
+
+def shop_offer_view(offer, user):
+    bought = int(user.get("shop_bought", {}).get(offer["id"], 0))
+    total_left = None if not offer["limit_total"] else max(0, offer["limit_total"] - offer["sold"])
+    user_left = None if not offer["limit_user"] else max(0, offer["limit_user"] - bought)
+    reward = shop_reward_view(offer["reward"])
+    owned_weapon = offer["reward"]["kind"] == "weapon" and weapons_lib.has(user, offer["reward"]["weapon"])
+    event_unavailable = (offer["reward"].get("weapon") == "theme_halloween"
+                         and db["settings"].get("halloween_enabled") is not True)
+    deadline = content_deadline(db, offer)
+    event_unavailable = event_unavailable or (bool(offer.get("event")) and (
+        not event_active(db, offer["event"]) or bool(deadline and deadline <= time.time())))
+    left = [x for x in (total_left, user_left) if x is not None]
+    return {"id": offer["id"], "title": offer["title"], "description": offer.get("description", ""), "currency": offer["currency"],
+            "price": offer["price"], "reward": reward, "total_left": total_left, "user_left": user_left, "limit_total": offer["limit_total"],
+            "limit_user": offer["limit_user"], "personal": bool(offer.get("uid")),
+            "available": offer.get("active", True) and (not left or min(left) > 0) and not owned_weapon and not event_unavailable and not hidden_theme_offer(offer, user),
+            "owned": owned_weapon, "event_unavailable": event_unavailable,
+            "event": offer.get("event", ""), "expires_at": deadline}
+
+
+LAVKA_SECTIONS = ("shop", "achievements", "quests")
+TOUR_SECTIONS = ("welcome", *LAVKA_SECTIONS)
+
+
+def lavka_hidden():
+
+    raw = db["settings"].get("lavka_hidden")
+    raw = raw if isinstance(raw, dict) else {}
+    return {k: bool(raw.get(k, k == "shop")) for k in LAVKA_SECTIONS}
+
+
+def tour_sections(user):
+
+    seen = user.get("tour_sections")
+    if not isinstance(seen, list):
+        seen = (["welcome"] + [key for key in LAVKA_SECTIONS if not lavka_hidden()[key]]) if user.get("tour_done") else []
+    user["tour_sections"] = [key for key in TOUR_SECTIONS if key in seen]
+    return user["tour_sections"]
+
+
+@route("/api/admin/lavka")
+def admin_lavka(user, body):
+    require_admin(user)
+    if "section" in body:
+        sec = str(body.get("section") or "")
+        if sec not in LAVKA_SECTIONS or not isinstance(body.get("hidden"), bool):
+            raise ApiError("bad_request")
+
+        for player in db["users"].values():
+            if isinstance(player, dict):
+                tour_sections(player)
+        cur = lavka_hidden()
+        cur[sec] = body["hidden"]
+        db["settings"]["lavka_hidden"] = cur
+    return {"hidden": lavka_hidden()}
+
+
+@route("/api/admin/weapons/visibility")
+def admin_weapon_visibility(user, body):
+    require_admin(user)
+    wid = str(body.get("id") or "")
+    if not weapons_lib.is_hideable(wid) or not isinstance(body.get("hidden"), bool):
+        raise ApiError("bad_request")
+    hidden = weapons_lib.hidden_set(db["settings"])
+    (hidden.add if body["hidden"] else hidden.discard)(wid)
+    db["settings"]["weapon_hidden"] = sorted(hidden)
+    return {"hidden": sorted(hidden)}
+
+
+def basement_bundle_offer(user):
+
+    if not weapons_lib.has(user, "theme_basement"):
+        return None
+    return {"id": "bundle:basement_wrench", "title": "Ключ смотрителя", "description": "Бесплатное особое снаряжение пакета «Подвал». Работает во всех темах, пока у вас есть Подвал. При отзыве оформления ключ тоже забирается.",
+            "currency": "ton", "price": 0, "reward": {"kind": "weapon", "weapon": "basement_wrench"},
+            "active": True, "limit_total": 0, "limit_user": 0, "sold": 0, "created": 0, "sort": -1000,
+            "uid": user["id"], "bundle_theme": "basement"}
+
+
+def hall_bundle_offers(user):
+    if not weapons_lib.has(user, "theme_hall"):
+        return []
+    return [{"id":"bundle:"+wid,"title":weapons_lib.WEAPONS[wid]["name"],
+             "description":"Бесплатное легендарное снаряжение оформления «Зал». Изумрудный след. При отзыве оформления предмет тоже забирается.",
+             "currency":"ton","price":0,"reward":{"kind":"weapon","weapon":wid},
+             "active":True,"limit_total":0,"limit_user":0,"sold":0,"created":0,"sort":-999,
+             "uid":user["id"],"bundle_theme":"hall"} for wid in HALL_GEAR]
+
+
+def shop_state(user):
+    offers = [o for o in shop_doc()["offers"].values()
+              if o.get("active", True) and (not o.get("uid") or o["uid"] == user["id"])]
+    offers.extend(hall_bundle_offers(user))
+    bundle = basement_bundle_offer(user)
+    if bundle:
+        offers.append(bundle)
+    if lavka_hidden()["shop"] and not is_admin(user):
+        offers = []
+    offers = [o for o in offers if not o.get("event") or (
+        event_active(db, o["event"]) and not (content_deadline(db, o) and content_deadline(db, o) <= time.time()))]
+    offers.sort(key=lambda o: (o.get("sort", 0), o["created"]))
+    views = [shop_offer_view(o, user) for o in offers if not hidden_theme_offer(o, user)]
+    return {"offers": [o for o in views if not o["owned"]],
+            "balance_ton": ton(user["balance"]), "hatcoin_balance": hatcoin_balance(user)}
+
+
+@app.post("/api/shop")
+def player_shop():
+    with lock:
+        user, _ = current_user()
+        response = jsonify(shop_state(user))
+    response.headers["Cache-Control"] = "no-store"
+    return response
+
+
+@route("/api/shop/buy")
+def shop_buy(user, body):
+    require_section("quests")
+    offer_id = str(body.get("id") or "")
+    offer = (basement_bundle_offer(user) if offer_id == "bundle:basement_wrench" else next((o for o in hall_bundle_offers(user) if o["id"] == offer_id), None)) if offer_id.startswith("bundle:") else shop_doc()["offers"].get(offer_id)
+    if not offer or not offer.get("active", True) or (offer.get("uid") and offer["uid"] != user["id"]):
+        raise ApiError("not_found", 404, message="Ордер недоступен.")
+    if lavka_hidden()["shop"] and not is_admin(user):
+        raise ApiError("not_found", 404, message="Магазин временно закрыт.")
+    if hidden_theme_offer(offer, user):
+        raise ApiError("not_found", 404, message="Оформление временно скрыто из каталога.")
+    view = shop_offer_view(offer, user)
+    if view["event_unavailable"]:
+        raise ApiError("event_unavailable", 400, message="Ивент недоступен.")
+    if view["owned"]:
+        raise ApiError("already_owned", 400, message="Это снаряжение у вас уже есть.")
+    if not view["available"]:
+        raise ApiError("sold_out", 400, message="Лимит ордера исчерпан.")
+    price = offer["price"]
+    if offer["currency"] == "ton":
+        if user["balance"] + 1e-9 < price:
+            raise ApiError("insufficient_funds", 400, message="Недостаточно GRAM.")
+    elif user.get("hatcoin_units", 0) < int(round(price * HATCOIN_UNITS)):
+        raise ApiError("insufficient_funds", 400, message="Недостаточно HatCoin.")
+    if offer["currency"] == "ton":
+        user["balance"] = ton(user["balance"] - price)
+    else:
+        user["hatcoin_units"] = user.get("hatcoin_units", 0) - int(round(price * HATCOIN_UNITS))
+    r = offer["reward"]
+    if r["kind"] == "ton":
+        user["balance"] = ton(user["balance"] + r["amount"])
+    elif r["kind"] == "hatcoin":
+        user["hatcoin_units"] = user.get("hatcoin_units", 0) + int(round(r["amount"] * HATCOIN_UNITS))
+    elif r['kind'] == 'free_coin':
+        user['free_spin_coins'] = free_coin_balance(user) + int(r['amount'])
+    elif r["kind"] == "weapon":
+        grant_weapon(user, r["weapon"])
+    else:
+        prize = season_award(user, r)
+        prize["source"] = "shop"
+    offer["sold"] = offer.get("sold", 0) + 1
+    bought = user.setdefault("shop_bought", {})
+    bought[offer["id"]] = int(bought.get(offer["id"], 0)) + 1
+    return {"ok": True, **shop_state(user), "weapons": weapons_lib.owned(user), "prizes": visible_prizes(user), 'free_spin_coins': free_coin_balance(user)}
+
+
+def shop_parse_reward(body):
+
+    kind = str(body.get("kind") or "")
+    if kind == 'free_coin':
+        amount = finite_free_coin_amount(body.get('amount'))
+        return {'kind': kind, 'amount': amount}
+    if kind in ("ton", "hatcoin"):
+        try:
+            amount = float(body.get("amount"))
+        except (TypeError, ValueError):
+            raise ApiError("bad_request", 400, message="Укажите количество награды.")
+        if not 0 < amount <= 100000:
+            raise ApiError("bad_request", 400, message="Количество награды: от 0 до 100000.")
+        return {"kind": kind, "amount": round(amount, 6)}
+    if kind == "weapon":
+        wid = str(body.get("weapon") or "")
+        if wid not in weapons_lib.WEAPONS or weapons_lib.WEAPONS[wid]["default"]:
+            raise ApiError("bad_request", 400, message="Выберите снаряжение.")
+        return {"kind": kind, "weapon": wid}
+    if kind in ("gift", "nft"):
+        return season_resolve_prize(body)
+    raise ApiError("bad_request", 400, message="Выберите тип награды.")
+
+
+def shop_clean(body, reward):
+    title = str(body.get("title") or "").strip()[:60]
+    if not title:
+        title = shop_reward_view(reward)["name"][:60]
+    currency = str(body.get("currency") or "ton")
+    if currency not in SHOP_CURRENCIES:
+        raise ApiError("bad_request", 400, message="Валюта: GRAM или HatCoin.")
+    try:
+        price = float(body.get("price"))
+        limit_total = int(body.get("limit_total") or 0)
+        limit_user = int(body.get("limit_user") or 0)
+    except (TypeError, ValueError):
+        raise ApiError("bad_request", 400, message="Проверьте цену и лимиты.")
+    if not 0 <= price <= 1000000 or not 0 <= limit_total <= 1000000 or not 0 <= limit_user <= 1000000:
+        raise ApiError("bad_request", 400, message="Проверьте цену и лимиты.")
+    event = str(body.get("event") or "")
+    if event and event not in QUEST_EVENTS:
+        raise ApiError("bad_request", 400, message="Выберите ивент.")
+    try:
+        lifetime = float(body.get("lifetime_hours") or 0)
+    except (ValueError, TypeError, OverflowError):
+        raise ApiError("bad_request", 400, message="Проверьте срок лота.")
+    if not 0 <= lifetime <= 8760:
+        raise ApiError("bad_request", 400, message="Срок лота: от 0 до 8760 часов.")
+    return {"title": title, "description": str(body.get("description") or "").strip()[:200], "currency": currency,
+            "event": event, "lifetime_hours": lifetime if event else 0,
+            "price": round(price, 6), "limit_total": limit_total, "limit_user": limit_user,
+            "active": body.get("active", True) is not False, "reward": reward}
+
+
+@route("/api/admin/shop")
+def admin_shop(user, body):
+    require_admin(user)
+    offers = sorted((o for o in shop_doc()["offers"].values() if not o.get("uid")), key=lambda o: (o.get("sort", 0), o["created"]))
+    return {"rows": [{**o, "reward_view": shop_reward_view(o["reward"])} for o in offers],
+            "weapons": [{"id": k, "name": v["name"], "event": v["event"], "rarity": v["rarity"]} for k, v in weapons_lib.WEAPONS.items() if not v["default"]]}
+
+
+@admin_io("/api/admin/shop/save")
+def admin_shop_save(body):
+    action = str(body.get("action") or "")
+    uid = ""
+    if body.get("key"):
+        with lock:
+            uid = find_user(body.get("key"))["id"]
+    if action == "delete":
+        with lock:
+            offers = shop_doc()["offers"]
+            oid = str(body.get("id") or "")
+            if oid not in offers:
+                raise ApiError("not_found", 404)
+            del offers[oid]
+            return {"ok": True}
+    if action not in ("create", "update"):
+        raise ApiError("bad_request")
+    reward = shop_parse_reward(body.get("reward") or {})
+    with lock:
+        offers = shop_doc()["offers"]
+        existing = offers.get(str(body.get("id") or "")) if action == "update" else None
+        if action == "update" and not existing:
+            raise ApiError("not_found", 404)
+        if action == "create" and len(offers) >= SHOP_LIMIT:
+            raise ApiError("limit", 400, message="Слишком много ордеров.")
+        clean = shop_clean({**(existing or {}), **body}, reward)
+        oid = existing["id"] if existing else secrets.token_hex(6)
+        offers[oid] = {**(existing or {"sold": 0, "created": int(time.time())}), **clean, "id": oid,
+                       **({"uid": uid} if uid else {})}
+        return {"ok": True, "id": oid}
+
+
+@route("/api/admin/user/shop")
+def admin_user_shop(user, body):
+    require_admin(user)
+    target = find_user(body.get("key"))
+    rows = [{**o, "reward_view": shop_reward_view(o["reward"])} for o in shop_doc()["offers"].values() if o.get("uid") == target["id"]]
+    return {"rows": rows}
+
+
+@route("/api/admin/user/weapons")
+def admin_user_weapons(user, body):
+    require_admin(user)
+    target = find_user(body.get("key"))
+    wid = str(body.get("weapon") or "")
+    try:
+        if body.get("action") == "revoke":
+            weapons_lib.revoke(target, wid)
+        else:
+            grant_weapon(target, wid)
+    except ValueError:
+        raise ApiError("bad_request", 400, message="Выберите снаряжение.")
+    return {"user": admin_user_detail(target)}
+
+
+@route("/api/admin/user/hatcoin")
+def admin_user_hatcoin(user, body):
+    require_admin(user)
+    target = find_user(body.get("key"))
+    try:
+        amount = float(body.get("amount"))
+    except (TypeError, ValueError):
+        raise ApiError("bad_request")
+    units = int(round(amount * HATCOIN_UNITS))
+    if body.get("mode") == "set":
+        if units < 0:
+            raise ApiError("bad_request")
+        target["hatcoin_units"] = units
+    elif body.get("mode") == "add":
+        target["hatcoin_units"] = max(0, target.get("hatcoin_units", 0) + units)
+    else:
+        raise ApiError("bad_request")
+    return {"user": admin_user_detail(target)}
+
+
+@route("/api/admin/withdrawals")
+def admin_withdrawals(user, body):
+    require_admin(user)
+    rows = list(db.setdefault("withdrawals", {}).values())
+
+    existing = {r["id"] for r in rows}
+    for uid, u in db["users"].items():
+        for prize in u.get("prizes", []):
+            if prize.get("status") == "withdraw_pending":
+                key = f"{uid}:{prize['id']}"
+                if key not in existing:
+                    rows.append({"id": key, "uid": uid, "prize_id": prize["id"],
+                        "status": "pending", "created": 0, "updated": 0,
+                        "name": prize["name"], "image": prize.get("image", ""),
+                        "value_ton": prize.get("value", 0), "tier": prize.get("tier", "")})
+    rows.sort(key=lambda r: r.get("created", 0), reverse=True)
+    return {"rows": [withdrawal_record(r) for r in rows[:500]],
+            "bot_enabled": bool(BOT_TOKEN),
+            "bot_username": db["settings"].get("bot_username", "")}
+
+
+def _withdrawal_target(req):
+    target = db["users"].get(req["uid"])
+    prize = next((p for p in (target or {}).get("prizes", []) if p.get("id") == req["prize_id"]), None) if target else None
+    return target, prize
+
+
+def _transfer_failed(req, target, prize, msg):
+    req.update(transfer="failed", transfer_error=str(msg)[:300], updated=int(time.time()))
+    save_db()
+    if target and prize:
+        _notify_admins_withdrawal(target, prize, req, error=str(msg)[:300])
+
+
+def relayer_transfer_request(key):
+
+
+    with lock:
+        req = db.setdefault("withdrawals", {}).get(key)
+        if not req or req.get("status") != "approved":
+            return
+        target, prize = _withdrawal_target(req)
+        if not target or not prize:
+            return _transfer_failed(req, target, prize, "Игрок или приз не найден")
+        if not str(target["id"]).startswith("tg"):
+            return _transfer_failed(req, target, prize, "Игрок без Telegram-аккаунта")
+        if not relayer_lib.available() or not relayer_ready():
+            return _transfer_failed(req, target, prize, "Релейер выключен или не авторизован")
+        traits = prize_withdraw_target(prize)
+        if not traits:
+            return _transfer_failed(req, target, prize, "Нет данных для поиска подарка на релейере")
+        reserved=sorted({p['nft_slug'].lower() for player in db['users'].values() for p in player.get('prizes',[]) if p.get('nft_slug') and p.get('status') in ('owned','deposit_pending','staked','withdraw_pending')})
+        job = {"id": key, "tg_id": int(str(target["id"])[2:]), "username": target.get("username", ""), 'exclude_slugs':reserved, **traits}
+        api_id, api_hash = relayer_creds()
+        session = relayer_doc().get("session", "")
+        req.update(transfer="queued", transfer_error="", attempts=int(req.get("attempts", 0)) + 1, updated=int(time.time()))
+        save_db()
+
+    def work():
+        try:
+            with RELAYER_SCAN_MUTEX:
+                results, session2 = relayer_lib.run(relayer_lib.transfer_jobs(api_id, api_hash, session, [job]))
+        except Exception as exc:
+            with lock:
+                r = db["withdrawals"].get(key)
+                if r and r.get("status") == "approved":
+                    t, pz = _withdrawal_target(r)
+                    _transfer_failed(r, t, pz, relayer_lib.explain(exc))
+            return
+        with lock:
+            if session2:
+                relayer_doc()["session"] = session2
+            r = db["withdrawals"].get(key)
+            if not r or r.get("status") != "approved":
+                return
+            t, pz = _withdrawal_target(r)
+            res = next((x for x in results if x.get("id") == key), {"status": "error", "error": "Релейер не вернул результат"})
+            if res.get("status") == "completed" and pz:
+                r.update(status="completed", transfer="done", moderator="relayer", auto_slug=res.get("slug", ""), transfer_error="", updated=int(time.time()))
+                pz["status"] = "withdrawn"
+                _send_bot_message(r["uid"], "withdraw_completed", gift=pz["name"], prize=pz)
+                save_db()
+            else:
+                msg = res.get("error") or ("Подарок не найден на релейере" if res.get("status") == "not_found" else res.get("status", "ошибка"))
+                _transfer_failed(r, t, pz, msg)
+
+    threading.Thread(target=work, daemon=True).start()
+
+
+@route("/api/admin/withdrawals/resolve")
+def admin_withdrawals_resolve(user, body):
+    require_admin(user)
+    key = str(body.get("id") or "")
+    action = str(body.get("action") or "")
+    if action not in ("approve", "reject", "complete", "retry"):
+        raise ApiError("bad_request")
+    req = db.setdefault("withdrawals", {}).get(key)
+    if req is None:
+        uid, _, prize_id = key.rpartition(":")
+        target = db["users"].get(uid)
+        prize = next((p for p in target.get("prizes", []) if str(p["id"]) == prize_id), None) if target else None
+        if not prize or prize.get("status") != "withdraw_pending":
+            raise ApiError("not_found", 404)
+        req = {"id": key, "uid": uid, "prize_id": prize["id"],
+               "name": prize["name"], "image": prize.get("image", ""),
+               "value_ton": prize.get("value", 0),
+               "status": "pending", "created": 0}
+        db["withdrawals"][key] = req
+    target, prize = _withdrawal_target(req)
+    if not prize:
+        raise ApiError("not_found", 404)
+    current = req.get("status", "pending")
+    failed = req.get("transfer") == "failed" or req.get("auto") == "failed"
+    start_transfer = False
+    if action == "approve" and current == "pending":
+
+        req.update(status="approved", transfer="queued", transfer_error="", auto="manual" if req.get("auto") == "queued" else req.get("auto"))
+        prize["status"] = "withdraw_processing"
+        start_transfer = True
+    elif action == "retry" and current == "approved" and req.get("transfer") == "failed":
+        req.update(transfer="queued", transfer_error="")
+        start_transfer = True
+    elif action == "reject" and (current == "pending" or (current == "approved" and failed)):
+        req["status"] = "rejected"
+        prize["status"] = "owned"
+        if req.get('withdraw_fee_ton') and not req.get('fee_refunded'):
+            target['balance']=ton(target['balance']+req['withdraw_fee_ton']);req['fee_refunded']=True
+    elif action == "complete" and current in ("pending", "approved"):
+
+        req.update(status="completed", transfer="manual")
+        prize["status"] = "withdrawn"
+    else:
+        raise ApiError("invalid_status_transition")
+    req["updated"] = int(time.time())
+    req["moderator"] = user["id"]
+    if action in ("reject", "complete"):
+        _send_bot_message(req["uid"], {"reject": "withdraw_rejected", "complete": "withdraw_completed"}[action], gift=prize["name"], prize=prize)
+    if start_transfer:
+        relayer_transfer_request(key)
+    return {"ok": True, "request": withdrawal_record(req)}
+
+
+def _player_deposits(uid, limit=12):
+    rows = []
+    for o in db.get('ton_payment_events', {}).values():
+        if o.get('uid') == uid:
+            rows.append({'ts': o['ts'], 'kind': 'GRAM', 'amount': o['amount']})
+    for o in db.get("stars_orders", {}).values():
+        if o.get("uid") == uid and o.get("status") == "credited":
+            rows.append({"ts": o.get("credited", 0), "kind": "Telegram Stars", "amount": o.get("amount", 0)})
+    for o in db.get("crypto_orders", {}).values():
+        if o.get("uid") == uid and o.get("status") == "credited" and not o.get("testnet"):
+            rows.append({"ts": o.get("credited", 0), "kind": "CryptoBot", "amount": o.get("amount", 0)})
+    for e in (relayer_doc().get("events") or {}).values():
+        if e.get("uid") == uid and e.get("status") == "credited":
+            rows.append({"ts": e.get("at", 0), "kind": "NFT-подарок", "amount": e.get("price_ton", 0), "note": e.get("collection", "")})
+    rows.sort(key=lambda r: r["ts"], reverse=True)
+    return {"count": len(rows), "total": ton(sum(r["amount"] for r in rows)), "rows": rows[:limit]}
+
+
+def _prize_origin(prize):
+    src = prize.get("source")
+    if src == "shop":
+        return "Куплено в лавке"
+    if prize.get("nft_slug") or src == "relayer":
+        return "Пополнение NFT-подарком"
+    tier = str(prize.get("tier") or "")
+    if tier.startswith("gift:"):
+        return "Выиграно в игре (режим «Подарки»)"
+    if src:
+        return f"Источник: {src}"
+    return "Выиграно в игре"
+
+
+@route("/api/admin/withdrawals/detail")
+def admin_withdrawal_detail(user, body):
+
+    require_admin(user)
+    key = str(body.get("id") or "")
+    req = db.setdefault("withdrawals", {}).get(key)
+    if req is None:
+        raise ApiError("not_found", 404)
+    target, prize = _withdrawal_target(req)
+    if not target:
+        raise ApiError("not_found", 404)
+    others = [r for r in db["withdrawals"].values() if r["uid"] == target["id"]]
+    others.sort(key=lambda r: r.get("created", 0), reverse=True)
+    traits = prize_withdraw_target(prize) if prize else None
+    return {"request": withdrawal_record(req),
+            "player": {**admin_user_row(target), "wallet": target.get("wallet", ""), "note_text": str(target.get("note") or ""),
+                       "telegram_id": str(target["id"])[2:] if str(target["id"]).startswith("tg") else ""},
+            "prize": {"name": req.get("name", ""), "value_ton": req.get("value_ton", 0), "origin": _prize_origin(prize or {}),
+                      "tier": (prize or {}).get("tier", ""), "slug": (prize or {}).get("nft_slug", ""),
+                      "collection": (traits or {}).get("collection", ""), "model": (traits or {}).get("model", "")},
+            "deposits": _player_deposits(target["id"]),
+            "withdrawals": [{"name": r.get("name", ""), "value_ton": r.get("value_ton", 0), "status": r.get("status", ""), "created": r.get("created", 0)} for r in others[:8]],
+            "games": [{"ts": h.get("ts", 0), "kind": h.get("kind", ""), "win": bool(h.get("win")), "cost_ton": h.get("cost_ton", 0), "payout_ton": h.get("payout_ton", 0), "target": h.get("target", "")}
+                      for h in (target.get("history") or [])[:10]],
+            "relayer_ready": bool(relayer_ready())}
+
+
+def _bot_app_url():
+    return tonconnect_config()["app_url"]
+
+
+def _notify_admins_withdrawal(user, prize, req, error=None):
+
+    who = ("@" + user["username"]) if user.get("username") else (user.get("first_name") or "Игрок")
+    mode = "автовывод через релейер" if req.get("auto") == "queued" else ""
+    ck = _prize_collection_key(prize)
+    with lock:
+        config = bot_editor_config()["messages"]
+        payload = message_payload(config, "admin_withdraw_error" if error else "admin_withdraw_new", _bot_app_url(), user.get("first_name"),
+                                  prize["name"], gift_emoji=gift_emoji_html(ck) if ck else "🎁",
+                                  extra={"value": f"{prize['value']:g}", "user": who, "id": str(user["id"])[2:],
+                                         "mode": mode, "error": error or ""})
+    text = "\n".join(l for l in payload["text"].split("\n") if re.sub(r"<[^>]+>", "", l).strip() != "Режим:")
+    markup = payload.get("reply_markup")
+    app_url = _bot_app_url()
+    try:
+        p = urlsplit(app_url)
+        if p.scheme == "https":
+            q = [(k, v) for k, v in parse_qsl(p.query, keep_blank_values=True) if k not in ("view", "wd")] + [("wd", req["id"])]
+            markup = {"inline_keyboard": [[{"text": "Рассмотреть", "web_app": {"url": urlunsplit((p.scheme, p.netloc, p.path or "/", urlencode(q), p.fragment))}}]]}
+    except Exception:
+        pass
+    for aid in effective_admin_ids():
+        _send_tg_async("tg" + str(aid), text, markup, html=True)
+
+
+def _prize_collection_key(prize):
+    tier = str((prize or {}).get("tier") or "")
+    return tier.split(":", 2)[1] if tier.startswith("gift:") and tier.count(":") >= 1 else ""
+
+
+def _send_bot_message(uid, key, name=None, gift=None, prize=None, extra=None):
+    with lock:
+        config = bot_editor_config()["messages"]
+        player = db.get("users", {}).get(uid, {})
+        ck = _prize_collection_key(prize)
+        tag = gift_emoji_html(ck) if ck else "🎁"
+        payload = message_payload(config, key, _bot_app_url(),
+                                  name or player.get("first_name"), gift, gift_emoji=tag, extra=extra)
+        if "{gift_emoji}" not in config[key]["text"] and tag != "🎁":
+            payload["text"] = payload["text"].replace("🎁", tag, 1)
+    _send_tg_async(uid, payload["text"], payload.get("reply_markup"), html=True)
+
+
+def _webhook_secret():
+    explicit = _env_first("TELEGRAM_WEBHOOK_SECRET")
+    if explicit:
+        return explicit
+
+
+    return hmac.new(BOT_TOKEN.encode(), b"hatdrop-telegram-webhook-v1", hashlib.sha256).hexdigest() if BOT_TOKEN else ""
+
+
+def _webhook_url(host=None):
+    origin = _env_first("RENDER_EXTERNAL_URL", "PUBLIC_APP_URL", "APP_URL", "SITE_URL") or host or ""
+    if not valid_url(origin):
+        raise ApiError("https_required")
+    parts = urlsplit(origin)
+    return f"{parts.scheme}://{parts.netloc}/telegram/webhook"
+
+
+def _configure_bot_webhook(host=None, only_if_needed=False):
+    if not BOT_TOKEN:
+        raise ApiError("bot_token_missing")
+    secret = _webhook_secret()
+    if not re.fullmatch(r"[A-Za-z0-9_-]{1,256}", secret):
+        raise ApiError("webhook_secret_invalid")
+    url = _webhook_url(host)
+    signature = hashlib.sha256((url + "\n" + secret).encode()).hexdigest()
+    try:
+        bot = tg_api("getMe")
+        info = tg_api("getWebhookInfo")
+        with lock:
+            saved = db["settings"].get("bot_webhook", {})
+        correct = info.get("url") == url and saved.get("signature") == signature and {"message", "pre_checkout_query", "callback_query"} <= set(info.get("allowed_updates", []))
+        if not only_if_needed or not correct:
+            if tg_api("setWebhook", url=url, secret_token=secret, allowed_updates=["message", "pre_checkout_query", "callback_query"]) is not True:
+                raise ValueError("webhook rejected")
+            info = tg_api("getWebhookInfo")
+        if info.get("url") != url:
+            raise ValueError("webhook URL mismatch")
+    except Exception:
+
+        raise ApiError("telegram_webhook_failed")
+    with lock:
+        db["settings"]["bot_username"] = bot.get("username", "")
+        db["settings"]["bot_webhook"] = {"url": url, "signature": signature, "connected_at": int(time.time())}
+        save_db()
+    return {"ok": True, "connected": True, "bot_username": bot.get("username", ""), "webhook_url": url}
+
+
+def bot_connect_on_start():
+
+    for delay in (0, 10, 30, 60):
+        if delay:
+            time.sleep(delay)
+        try:
+            _configure_bot_webhook(only_if_needed=True)
+            print("Telegram webhook connected", flush=True)
+            return
+        except ApiError as error:
+            print("Telegram webhook connection:", error.code, flush=True)
+            if error.code in ("bot_token_missing", "webhook_secret_invalid", "https_required"):
+                return
+
+
+@app.post("/telegram/webhook")
+def bot_webhook():
+    secret = _webhook_secret()
+    if not secret or not hmac.compare_digest(
+            request.headers.get("X-Telegram-Bot-Api-Secret-Token", ""), secret):
+        return ("Forbidden", 403)
+    payload = request.get_json(silent=True) or {}
+    if payload.get('callback_query'):
+        return staking_deposit_callback(payload['callback_query'])
+    if payload.get("pre_checkout_query"):
+        stars_pre_checkout(payload["pre_checkout_query"])
+        return jsonify({"ok": True})
+    message = payload.get("message") or {}
+    sender = message.get("from") or {}
+    chat = message.get("chat") or {}
+    if not sender.get("id") or chat.get("type") != "private":
+        return jsonify({"ok": True})
+    if message.get("successful_payment"):
+        stars_successful_payment(sender["id"], message["successful_payment"])
+        return jsonify({"ok": True})
+    doc_file = message.get("document")
+    if doc_file and str(sender["id"]) == OWNER_ADMIN_ID and str(message.get("caption") or "").strip().lower().startswith("/restore"):
+        try:
+            path = tg_api("getFile", file_id=doc_file["file_id"])["file_path"]
+            with urllib.request.urlopen(f"https://api.telegram.org/file/bot{BOT_TOKEN}/{path}", timeout=60) as resp:
+                count = restore_backup(resp.read())
+            tg_api("sendMessage", chat_id=sender["id"], text=f"✅ База восстановлена из копии. Игроков: {count}.")
+        except Exception as exc:
+            msg = exc.message if isinstance(exc, ApiError) else "Не удалось прочитать файл."
+            tg_api("sendMessage", chat_id=sender["id"], text=f"❌ {msg}")
+        return jsonify({"ok": True})
+    text = str(message.get("text") or "").strip()
+    command = text.split(maxsplit=1)[0].split("@")[0] if text else ""
+    command = command.lower()
+    if command in ("/start", "/help"):
+        _send_bot_message(f"tg{sender['id']}", "welcome" if command == "/start" else "help", name=sender.get("first_name"))
+    elif command.startswith("/"):
+        with lock:
+            exists = command[1:] in commands_config(db["settings"].get("bot_commands", {}))
+            if exists:
+                _send_bot_message(f"tg{sender['id']}", "command:" + command[1:], name=sender.get("first_name"))
+    return jsonify({"ok": True})
+
+
+@route("/api/admin/bot/status")
+def admin_bot_status(user, body):
+    require_admin(user)
+    saved = db["settings"].get("bot_webhook", {})
+    connected, error = False, ""
+    try:
+        url = _webhook_url(request.host_url)
+        if BOT_TOKEN:
+            info = tg_api("getWebhookInfo")
+            expected = hashlib.sha256((url + "\n" + _webhook_secret()).encode()).hexdigest()
+            connected = info.get("url") == url and saved.get("signature") == expected
+    except ApiError as e:
+        error = e.code
+    except Exception:
+        error = "telegram_unavailable"
+    return {"configured": bool(BOT_TOKEN), "connected": connected, "connection_error": error,
+            "webhook_secret_configured": bool(_webhook_secret()),
+            "bot_username": db["settings"].get("bot_username", ""),
+            "webhook_path": "/telegram/webhook"}
+
+
+@route("/api/admin/bot/messages")
+def admin_bot_messages(user, body):
+    require_admin(user)
+    return bot_editor_config()
+
+
+def bot_editor_config():
+    settings = db.get("settings", {})
+    commands = commands_config(settings.get("bot_commands", {}))
+    messages = messages_config(settings.get("bot_messages", {}))
+    for name, value in commands.items():
+        messages["command:" + name] = {**value, "label": "/" + name + " · " + value["description"]}
+    return {"messages": messages, "commands": commands, "defaults": DEFAULT_MESSAGES, "app_url": _bot_app_url()}
+
+
+def sync_bot_commands():
+    if not BOT_TOKEN:
+        return False
+    commands = [{"command": "start", "description": "Начать игру"}, {"command": "help", "description": "Помощь"}]
+    commands.extend({"command": name, "description": item["description"]}
+                    for name, item in commands_config(db["settings"].get("bot_commands", {})).items())
+    try:
+        return tg_api("setMyCommands", commands=commands, scope={"type": "all_private_chats"}) is True
+    except Exception:
+        return False
+
+
+@route("/api/admin/bot/commands/save")
+def admin_bot_commands_save(user, body):
+    require_admin(user)
+    try:
+        name = command_name(body.get("command"))
+        message = body.get("message")
+        value = validate_command({**message, "description": body.get("description")} if isinstance(message, dict) else None)
+    except ValueError as error:
+        raise ApiError(str(error))
+    if any(b["action"] == "app" for b in value["buttons"]) and not valid_url(_bot_app_url()):
+        raise ApiError("app_https_url_required")
+    saved = commands_config(db["settings"].get("bot_commands", {}))
+    if body.get("create") is True and name in saved:
+        raise ApiError("command_exists")
+    if name not in saved and len(saved) >= MAX_CUSTOM_COMMANDS:
+        raise ApiError("command_limit")
+    saved[name] = value
+    db["settings"]["bot_commands"] = saved
+    return {"ok": True, **bot_editor_config(), "menu_synced": sync_bot_commands()}
+
+
+@route("/api/admin/bot/commands/delete")
+def admin_bot_commands_delete(user, body):
+    require_admin(user)
+    try:
+        name = command_name(body.get("command"))
+    except ValueError as error:
+        raise ApiError(str(error))
+    saved = commands_config(db["settings"].get("bot_commands", {}))
+    if name not in saved:
+        raise ApiError("not_found", 404)
+    del saved[name]
+    db["settings"]["bot_commands"] = saved
+    return {"ok": True, **bot_editor_config(), "menu_synced": sync_bot_commands()}
+
+
+@route("/api/admin/bot/commands/sync")
+def admin_bot_commands_sync(user, body):
+    require_admin(user)
+    return {"ok": True, "menu_synced": sync_bot_commands()}
+
+
+@route("/api/admin/bot/messages/save")
+def admin_bot_messages_save(user, body):
+    require_admin(user)
+    key = body.get("key")
+    if not isinstance(key, str) or key not in DEFAULT_MESSAGES:
+        raise ApiError("message_key_invalid")
+    saved = db["settings"].setdefault("bot_messages", {})
+    if body.get("reset") is True:
+        saved.pop(key, None)
+    else:
+        try:
+            value = validate_message(body.get("message"))
+        except ValueError as error:
+            raise ApiError(str(error))
+        if any(b["action"] == "app" for b in value["buttons"]) and not valid_url(_bot_app_url()):
+            raise ApiError("app_https_url_required")
+        saved[key] = value
+    return {"ok": True, "message": messages_config(saved)[key]}
+
+
+@route("/api/admin/bot/setup")
+def admin_bot_setup(user, body):
+    require_admin(user)
+    return _configure_bot_webhook(request.host_url)
+
+
+@route("/api/admin/promos")
+def admin_promos(user, body):
+    require_admin(user)
+    return {"rows": [{"code": c, **v, "owner_name": display_name(db['users'][v['owner_uid']]) if v.get('owner_uid') in db['users'] else '', "referrals": sum(1 for u in db['users'].values() if u.get('referral_code_claimed') == c)} for c, v in sorted(db.setdefault("promocodes", {}).items(), reverse=True) if not v.get('deleted')]}
+
+
+@route("/api/admin/promos/create")
+def admin_promos_create(user, body):
+    require_admin(user)
+    code = campaign_code(body.get('code') or secrets.token_hex(5))
+    codes = db.setdefault("promocodes", {})
+    if code_reserved(code):
+        raise ApiError("promo_exists")
+    try:
+        limit = int(body.get("limit", 1))
+    except (TypeError, ValueError):
+        raise ApiError("bad_request")
+    if limit < 1 or limit > 100000:
+        raise ApiError("bad_request")
+    rewards = clean_promo_rewards(body.get("rewards", [{**body, "kind": body.get("kind") or "balance"}]), campaign=True)
+    conditions = clean_promo_conditions(body.get("conditions", []))
+    row = {"kind": "multi", "rewards": rewards, "conditions": conditions, "limit": limit, "uses": 0, "active": True, "created": int(time.time())}
+    row['owner_uid'] = campaign_owner(body.get('owner', ''))
+    codes[code] = row
+    return {"code": code, "ok": True}
+
+
+@route("/api/admin/promos/update")
+def admin_promos_update(user, body):
+    require_admin(user)
+    codes = db.setdefault("promocodes", {})
+    code = str(body.get("code", "")).upper()
+    if code not in codes:
+        raise ApiError("not_found", 404)
+    if body.get("delete"):
+        codes[code].update(active=False, deleted=True)
+    else:
+        changes = {}
+        if 'owner' in body:
+            owner = campaign_owner(body['owner'])
+            if codes[code].get('personal_referral') or codes[code].get('uses', 0) and owner != codes[code].get('owner_uid', ''):
+                raise ApiError('bad_request', message='Нельзя менять владельца уже используемого реферального кода.')
+            changes['owner_uid'] = owner
+        if "rewards" in body:
+            changes.update(kind="multi", rewards=clean_promo_rewards(body["rewards"], campaign=True))
+        if "conditions" in body:
+            changes["conditions"] = clean_promo_conditions(body["conditions"])
+        if "limit" in body:
+            try:
+                limit = int(body["limit"])
+            except (ValueError, TypeError):
+                raise ApiError("bad_request")
+            if not max(1, codes[code].get("uses", 0)) <= limit <= 100000:
+                raise ApiError("bad_request", 400, message="Лимит не может быть меньше числа активаций.")
+            changes["limit"] = limit
+        if "active" in body:
+            if not isinstance(body["active"], bool):
+                raise ApiError("bad_request")
+            changes["active"] = body["active"]
+        codes[code].update(changes)
+    return {"ok": True}
+
+
+@app.post("/api/quests")
+def player_quests():
+
+    with lock:
+        user, _ = current_user()
+        enabled = db["settings"].get("quests_enabled", True) is True
+        rows = quest_listed(db, user)
+        if not enabled:
+            rows = [r for r in rows if r.get("uid") or r.get("achievement")]
+    response = jsonify({"enabled": enabled or bool(rows), "rows": rows, "server_time": int(time.time())})
+    response.headers["Cache-Control"] = "no-store"
+    return response
+
+
+@route("/api/weapons/stats")
+def weapon_stats(user, body):
+
+    users = [u for u in db["users"].values() if isinstance(u, dict)
+             and str(u.get("id", "")).startswith("tg") and not u.get("demo")]
+    total = max(1, len(users))
+    out = {}
+    for wid, w in weapons_lib.WEAPONS.items():
+        n = sum(1 for u in users if wid in weapons_lib.owned(u))
+        out[wid] = {"name": w["name"], "rarity": w["rarity"], "owners": n, "percent": round(100.0 * n / total, 1)}
+    return {"weapons": out}
+
+
+def weapon_claims(user):
+    c = user.get("wclaims")
+    if not isinstance(c, list):
+        c = user["wclaims"] = []
+    return c
+
+
+def weapon_catalog_view(user):
+    cfg = weapons_lib.get_cfg(db["settings"])
+    prog = weapons_lib.progress(user, cfg)
+    claims = set(weapon_claims(user))
+    items = {k: {"name": v["name"], "rarity": v["rarity"], "event": v["event"], "default": bool(v["default"])}
+             for k, v in weapons_lib.WEAPONS.items() if weapons_lib.is_gear(k)}
+    cols = [{**c, "have": prog["collections"][c["id"]], "claimed": "c:" + c["id"] in claims} for c in cfg["collections"]]
+    levels = [{**lv, "claimed": "l:" + lv["id"] in claims} for lv in cfg["levels"]]
+    return {"items": items, "collections": cols, "levels": levels, "total": prog["total"], "have": prog["have"]}
+
+
+@route("/api/theme/set")
+def theme_set(user, body):
+    tid = str(body.get("id") or "")
+    if (tid == "halloween" and db["settings"].get("halloween_enabled") is not True
+            and not weapons_lib.has(user, "theme_halloween")):
+        raise ApiError("event_unavailable", 400, message="Ивент недоступен.")
+    if tid not in ("meadow", "halloween", "basement", "hall") or "theme_" + tid not in weapons_lib.owned(user) or "theme_" + tid in hidden_for(user):
+        raise ApiError("locked", 400, message="Это оформление недоступно.")
+    user["theme"] = tid
+    user["theme_epoch"] = int(db["settings"].get("halloween_epoch") or 0)
+    return {"ok": True, "theme": effective_theme(user)}
+
+
+@route("/api/admin/maintenance")
+def admin_maintenance(user, body):
+    require_admin(user)
+    if "enabled" in body:
+        if not isinstance(body["enabled"], bool):
+            raise ApiError("bad_request")
+        db["settings"]["maintenance"] = {"enabled": body["enabled"], "text": str(body.get("text") or "").strip()[:300]}
+    elif "text" in body:
+        db["settings"]["maintenance"] = {**maintenance_cfg(), "text": str(body.get("text") or "").strip()[:300]}
+    return maintenance_cfg()
+
+
+def _admin_levels_view():
+    cfg = level_cfg()
+    rewards = db["settings"].get("level_rewards") or {}
+    rows = []
+    for n in range(1, cfg["count"] + 1):
+        r = rewards.get(str(n))
+        rows.append({"level": n, "need": level_need(n, cfg["needs"]), "default_need": level_need(n, {}),
+                     "reward": ({**r, "view": shop_reward_view(r)} if r else None)})
+    extra = {n: r for n, r in rewards.items() if n.isdigit() and int(n) > cfg["count"]}
+    return {"count": cfg["count"], "max_count": LEVEL_COUNT_MAX, "levels": rows, "hidden_rewards": len(extra),
+            "items": [{"id": k, "name": v["name"], "rarity": v["rarity"], "kind": v.get("kind", "gear"), "default": bool(v["default"])}
+                      for k, v in weapons_lib.WEAPONS.items()]}
+
+
+@route("/api/admin/levels")
+def admin_levels(user, body):
+
+    require_admin(user)
+    if "levels" in body:
+        raw = body.get("levels")
+        try:
+            count = int(body.get("count"))
+        except (TypeError, ValueError):
+            raise ApiError("bad_request")
+        if not isinstance(raw, list) or not 1 <= count <= LEVEL_COUNT_MAX or len(raw) != count:
+            raise ApiError("bad_request", 400, message="Неверная таблица уровней.")
+        needs, rewards, prev = {}, {}, 0.0
+        for i, row in enumerate(raw, start=1):
+            if not isinstance(row, dict):
+                raise ApiError("bad_request")
+            try:
+                need = 0.0 if i == 1 else round(float(row.get("need")), 4)
+            except (TypeError, ValueError, OverflowError):
+                raise ApiError("bad_request", 400, message=f"Уровень {i}: нужно число.")
+            if i > 1 and (not need == need or need <= prev):
+                raise ApiError("bad_request", 400, message=f"Уровень {i}: оборот должен быть больше, чем у уровня {i - 1}.")
+            prev = need
+            if i > 1 and abs(need - level_need(i, {})) > 1e-9:
+                needs[str(i)] = need
+            r = row.get("reward")
+            if r:
+                if not isinstance(r, dict) or str(r.get("kind")) not in ("ton", "hatcoin", "weapon"):
+                    raise ApiError("bad_request", 400, message=f"Уровень {i}: выберите тип награды.")
+                rewards[str(i)] = shop_parse_reward(r)
+        old = db["settings"].get("level_rewards") or {}
+        for n, r in old.items():
+            if n.isdigit() and int(n) > count:
+                rewards[n] = r
+        db["settings"]["level_cfg"] = {"count": count, "needs": needs}
+        db["settings"]["level_rewards"] = rewards
+    return _admin_levels_view()
+
+
+@route("/api/weapons/catalog")
+def weapon_catalog(user, body):
+    return weapon_catalog_view(user)
+
+
+@route("/api/weapons/claim")
+def weapon_claim(user, body):
+    view = weapon_catalog_view(user)
+    kind, rid = str(body.get("type") or ""), str(body.get("id") or "")
+    if kind == "collection":
+        row = next((c for c in view["collections"] if c["id"] == rid), None)
+        have = row and row["have"]
+    elif kind == "level":
+        row = next((c for c in view["levels"] if c["id"] == rid), None)
+        have = view["have"]
+    else:
+        row = None
+    if not row:
+        raise ApiError("not_found", 404, message="Награда не найдена.")
+    key = ("c:" if kind == "collection" else "l:") + rid
+    if key in weapon_claims(user):
+        raise ApiError("already_claimed", 400, message="Награда уже получена.")
+    if have < row["need"]:
+        raise ApiError("not_ready", 400, message="Коллекция ещё не собрана.")
+    weapon_claims(user).append(key)
+    user["balance"] = ton(user["balance"] + row["reward"])
+    return {"ok": True, "balance_ton": ton(user["balance"]), **weapon_catalog_view(user)}
+
+
+@route("/api/admin/weapons")
+def admin_weapons(user, body):
+    require_admin(user)
+    cfg = weapons_lib.get_cfg(db["settings"])
+    hidden = weapons_lib.hidden_set(db["settings"])
+    users = [u for u in db["users"].values() if isinstance(u, dict)]
+    total = max(1, len(users))
+    weapons = [{"id": k, "name": v["name"], "rarity": v["rarity"], "event": v["event"], "default": bool(v["default"]),
+                "owners": sum(1 for u in users if k in weapons_lib.owned(u)), "hidden": k in hidden}
+               for k, v in weapons_lib.WEAPONS.items() if weapons_lib.is_gear(k)]
+    spins = [{"id": k, "name": v["name"], "rarity": v["rarity"], "hidden": k in hidden,
+              "owners": sum(1 for u in users if k in weapons_lib.owned(u))}
+             for k, v in weapons_lib.WEAPONS.items() if v.get("kind") == "spin"]
+    claims = sum(len(u.get("wclaims") or []) for u in users)
+    themes = [{"id": k, "name": v["name"], "rarity": v["rarity"], "hidden": k in hidden, "default": bool(v["default"])}
+              for k, v in weapons_lib.WEAPONS.items() if v.get("kind") == "theme"]
+    return {"cfg": cfg, "weapons": weapons, "spins": spins, "themes": themes, "players": total, "claims": claims}
+
+
+@route("/api/admin/weapons/save")
+def admin_weapons_save(user, body):
+    require_admin(user)
+    try:
+        cfg = weapons_lib.clean_cfg(body.get("cfg"))
+    except ValueError as exc:
+        msg = {"collection_name": "У коллекции должно быть название.", "collection_number": "Проверьте награду и количество в коллекции.",
+               "level_number": "Проверьте уровни: нужно число от 1 и награда."}.get(str(exc), "Проверьте настройки.")
+        raise ApiError("bad_request", 400, message=msg)
+    db["settings"]["weapon_cfg"] = cfg
+    return {"ok": True, "cfg": cfg}
+
+
+@route("/api/tour/complete")
+def tour_complete(user, body):
+
+    available = ["welcome"] + [key for key in LAVKA_SECTIONS if not lavka_hidden()[key]]
+    sections = body.get("sections", available)
+    if not isinstance(sections, list) or any(not isinstance(key, str) or key not in TOUR_SECTIONS for key in sections):
+        raise ApiError("bad_request")
+    seen = set(tour_sections(user)) | (set(sections) & set(available))
+    user["tour_sections"] = [key for key in TOUR_SECTIONS if key in seen]
+    user["tour_done"] = all(key in seen for key in available)
+    return {"ok": True, "tour_done": user["tour_done"], "tour_sections": user["tour_sections"]}
+
+
+@route("/api/quests/claim")
+def player_quest_claim(user, body):
+    require_section("quests")
+    try:
+        q = quest_claim(db, user, body.get("id"), launched=db["settings"].get("quests_enabled") is True)
+    except ValueError as exc:
+        raise ApiError(str(exc))
+    amount = q["reward_amount"]
+    if q["reward_type"] == "weapon":
+        grant_weapon(user, q["reward_weapon"])
+    elif q["reward_type"] == "ton":
+        user["balance"] = ton(user["balance"] + amount)
+    elif q['reward_type'] == 'free_coin':
+        user['free_spin_coins'] = free_coin_balance(user) + int(amount)
+    else:
+        user["hatcoin_units"] = user.get("hatcoin_units", 0) + int(round(amount * HATCOIN_UNITS))
+    return {"ok": True, "balance_ton": ton(user["balance"]),
+            "hatcoin_balance": hatcoin_balance(user), "weapons": weapons_lib.owned(user), 'free_spin_coins': free_coin_balance(user)}
+
+
+@route("/api/admin/quests")
+def admin_quests(user, body):
+    require_admin(user)
+    from quest_engine import QUEST_ICONS
+    return {"enabled": db["settings"].get("quests_enabled") is True,
+            "events": [{"id": "", "label": "Без ивента"}] + [{"id": key, "label": label} for key, label in QUEST_EVENTS.items()],
+            "icons": list(QUEST_ICONS),
+            "weapons": [{"id": k, "name": v["name"], "event": v["event"]} for k, v in weapons_lib.WEAPONS.items() if not v["default"]],
+            "types": [{"id": k, "label": label, "unit": unit} for k, (label, unit) in QUEST_TYPES.items()],
+            "rows": quest_listed(db, user, admin=True)}
+
+
+@route("/api/admin/quests/save")
+def admin_quests_save(user, body):
+    require_admin(user)
+    quests = quest_definitions(db)
+    if "enabled" in body and body.get("action") == "launch":
+        db["settings"]["quests_enabled"] = body["enabled"] is True
+        return admin_quests(user, {})
+    action = body.get("action")
+    if action == "delete":
+        qid = str(body.get("id", ""))
+        if qid not in quests:
+            raise ApiError("not_found", 404)
+        del quests[qid]
+        return admin_quests(user, {})
+    if action not in ("create", "update"):
+        raise ApiError("bad_request")
+    existing = quests.get(str(body.get("id", ""))) if action == "update" else None
+    if action == "update" and not existing:
+        raise ApiError("not_found", 404)
+    if action == "create" and sum(1 for q in quests.values() if not q.get("uid")) >= 150:
+        raise ApiError("quest_limit")
+    try:
+        new = validate_quest(body, existing)
+    except (ValueError, TypeError, OverflowError) as exc:
+        field = str(exc) if str(exc) in ("threshold", "goal", "reward_amount", "start_at", "end_at", "reward_weapon", "event", "lifetime_hours") else "quest"
+        raise ApiError("quest_invalid", field=field)
+    now = int(time.time())
+    qid = existing["id"] if existing else secrets.token_hex(8)
+
+
+    measure = ("kind", "goal", "threshold", "start_at", "end_at", "duration_hours", "event", "lifetime_hours")
+    changed = existing and any(new[x] != existing.get(x, "" if x == "event" else 0 if x == "lifetime_hours" else None) for x in measure)
+    quests[qid] = {**new, "id": qid, "created": existing["created"] if existing else now,
+                   "version": existing.get("version", 1) + int(bool(changed)) if existing else 1}
+    return admin_quests(user, {})
+
+
+PERSONAL_QUEST_LIMIT = 20
+
+
+def _personal_view(target):
+    return {"rows": personal_quest_rows(db, target), "types": [{"id": k, "label": label, "unit": unit} for k, (label, unit) in QUEST_TYPES.items()]}
+
+
+@route("/api/admin/user/quests")
+def admin_user_quests(user, body):
+    require_admin(user)
+    return _personal_view(find_user(body.get("key")))
+
+
+@route("/api/admin/user/quests/save")
+def admin_user_quests_save(user, body):
+
+    require_admin(user)
+    target = find_user(body.get("key"))
+    quests = quest_definitions(db)
+    action = body.get("action")
+    if action == "delete":
+        qid = str(body.get("id", ""))
+        if not quests.get(qid) or quests[qid].get("uid") != target["id"]:
+            raise ApiError("not_found", 404)
+        del quests[qid]
+        return _personal_view(target)
+    if action != "create":
+        raise ApiError("bad_request")
+    if sum(1 for q in quests.values() if q.get("uid") == target["id"]) >= PERSONAL_QUEST_LIMIT:
+        raise ApiError("quest_limit")
+    try:
+        new = validate_quest({**body, "active": True}, None)
+    except (ValueError, TypeError, OverflowError) as exc:
+        field = str(exc) if str(exc) in ("threshold", "goal", "reward_amount", "start_at", "end_at", "reward_weapon") else "quest"
+        raise ApiError("quest_invalid", field=field)
+    qid = secrets.token_hex(8)
+    quests[qid] = {**new, "id": qid, "uid": target["id"], "created": int(time.time()), "version": 1}
+    if str(target["id"]).startswith("tg"):
+        url = _bot_app_url()
+        markup = {"inline_keyboard": [[{"text": "Открыть приложение", "web_app": {"url": url}}]]} if valid_url(url) else None
+        reward = f"{new['reward_amount']:g} " + {'ton':'GRAM','hatcoin':'HatCoin','free_coin':'монет фриспина'}.get(new['reward_type'],'снаряжение')
+        _send_tg_async(target["id"], f"🎯 У вас новый личный квест: <b>{html.escape(new['title'])}</b>\nНаграда: <b>{reward}</b>", markup, html=True)
+    return _personal_view(target)
+
+
+@route("/api/wallet")
+def wallet(user, body):
+    user["wallet"] = str(body.get("address", ""))[:128]
+    return {"ok": True}
+
+
+@route("/api/settings")
+def settings(user, body):
+    user["anon"] = bool(body.get("anon"))
+    return {"anon": user["anon"]}
+
+
+@route("/api/history")
+def history(user, body):
+    return {"rows": user["history"]}
+
+
+@route("/api/gifts/catalog")
+def gifts_catalog(user, body):
+    items = []
+    for s, g in gifts_map().items():
+        priced = [m["price_ton"] for m in gift_models(s)]
+        items.append({"slug": s, "name": g["name"], "price_ton": gift_floor(s), "image": gift_image(s),
+                      "popular": g.get("pop", 0),
+
+                      "top_ton": max(priced) if priced else None})
+    return {"items": items, "margin": MARGIN, "price_steps": [], "price_base": 1}
+
+
+def _models_payload(user, body):
+    slug = body.get("slug", "")
+    entry = gift_entry(slug)
+    models = gift_models(slug)
+
+    if models:
+        status = "ready"
+    elif slug in MODEL_LOADING:
+        status = "loading"
+    elif time.time() - MODEL_FAIL.get(slug, 0) < 45:
+        status = "failed"
+    else:
+        status = "loading"
+    return {"slug": slug, "name": entry["name"], "floor": gift_floor(slug), "image": gift_image(slug),
+            "models": models, "status": status}
+
+
+_models_view = api(_models_payload)
+
+
+@app.post("/api/gifts/models")
+def gifts_models():
+    slug = (request.get_json(silent=True) or {}).get("slug", "")
+    if slug in CATALOG and not CATALOG[slug].get("models"):
+        start_models_fetch(slug)
+    return _models_view()
+
+
+@route("/api/gifts/mine")
+def gifts_mine(user, body):
+
+    if not relayer_ready():
+        raise ApiError("disabled")
+    return {"market_ok": True, "gifts": relayer_catalog()}
+
+
+@route("/api/referral/create")
+def referral_create(user, body):
+    if not bot_username():
+        raise ApiError("referral_unavailable")
+    user["ref_created"] = True
+    return {"referral": referral_view(user)}
+
+
+@route("/api/referral/withdraw")
+def referral_withdraw(user, body):
+    amount = ton(user.get("ref_balance", 0))
+    if amount + 1e-9 < REFERRAL_MIN_WITHDRAW:
+        raise ApiError("below_minimum")
+    user["ref_balance"] = 0.0
+    user["balance"] = ton(user["balance"] + amount)
+    return {"referral": referral_view(user), "balance_ton": ton(user["balance"])}
+
+
+def ranking():
+    rows = [u for u in db["users"].values() if u["games"] > 0]
+    rows.sort(key=lambda u: u["turnover"], reverse=True)
+    return rows
+
+
+def avatar(user, own=False):
+
+    if (user.get("anon") and not own) or not str(user["id"]).startswith("tg"):
+        return ""
+    return f"/avatar/{user['key']}.jpg"
+
+
+AVATAR_CACHE = {}
+AVATAR_OK_TTL = 6 * 3600
+AVATAR_FAIL_TTL = 600
+
+
+def tg_api(method, **params):
+    url = f"https://api.telegram.org/bot{BOT_TOKEN}/{method}"
+    req = urllib.request.Request(url, data=json.dumps(params, ensure_ascii=False).encode("utf-8"),
+                                 headers={"Content-Type": "application/json"}, method="POST")
+    with urllib.request.urlopen(req, timeout=8) as resp:
+        data = json.load(resp)
+    if not data.get("ok"):
+        raise ValueError(data.get("description", "telegram error"))
+    return data["result"]
+
+
+def fetch_tg_avatar(tg_id, photo_url):
+
+    if BOT_TOKEN:
+        try:
+            photos = tg_api("getUserProfilePhotos", user_id=tg_id, limit=1).get("photos") or []
+            if photos:
+                sizes = photos[0]
+                pick = next((p for p in sizes if p.get("width", 0) >= 160), sizes[-1])
+                path = tg_api("getFile", file_id=pick["file_id"])["file_path"]
+                return _download_image(f"https://api.telegram.org/file/bot{BOT_TOKEN}/{path}")
+        except Exception as e:
+            print(f"avatar via bot failed for {tg_id}: {e}", flush=True)
+    if photo_url:
+        try:
+            return _download_image(photo_url)
+        except Exception as e:
+            print(f"avatar via photo_url failed for {tg_id}: {e}", flush=True)
+    return None
+
+
+@app.get("/avatar/<key>.jpg")
+def avatar_image(key):
+    key = key[:32]
+    now = time.time()
+    hit = AVATAR_CACHE.get(key)
+    if hit is None or now - hit[1] > (AVATAR_OK_TTL if hit[0] else AVATAR_FAIL_TTL):
+        u = next((x for x in list(db["users"].values()) if x.get("key") == key), None)
+        data = None
+        if u and str(u["id"]).startswith("tg"):
+            data = fetch_tg_avatar(str(u["id"])[2:], u.get("photo_url", ""))
+        if len(AVATAR_CACHE) > 3000:
+            AVATAR_CACHE.clear()
+        hit = AVATAR_CACHE[key] = (data, now)
+    if not hit[0]:
+        resp = app.response_class("", status=404)
+        resp.headers["Cache-Control"] = "public, max-age=300"
+        return resp
+    resp = app.response_class(hit[0][0], mimetype=hit[0][1])
+    resp.headers["Cache-Control"] = "public, max-age=3600"
+    return resp
+
+
+@route("/api/leaderboard")
+def leaderboard(user, body):
+    now = int(time.time())
+    cur = season_current()
+    if cur and not cur.get("finished") and now >= cur["end"]:
+        season_finish(cur)
+    if cur:
+        prizes = {k: season_public_prize(v) for k, v in cur.get("prizes", {}).items()}
+        if cur.get("finished"):
+            rows = [{**r, "me": r["uid"] == user["id"], "key": db["users"].get(r["uid"], {}).get("key", "")} for r in cur.get("final_rows", [])]
+            place = next((r["rank"] for r in rows if r["me"]), 0)
+            mine = next((r["total_ton"] for r in rows if r["me"]), 0)
+        else:
+            ranked = season_ranking(cur)
+            rows = [{"rank": i + 1, "key": u["key"], "name": display_name(u), "avatar": avatar(u), "total_ton": ton(season_score(u, cur)), "me": u["id"] == user["id"]}
+                    for i, u in enumerate(ranked[:50])]
+            place = next((i + 1 for i, u in enumerate(ranked) if u["id"] == user["id"]), 0)
+            mine = ton(season_score(user, cur))
+        for r in rows:
+            target = db["users"].get(r.pop("uid", None))
+            if target:
+                r.update(name=display_name(target), avatar=avatar(target))
+            r["prize"] = prizes.get(str(r["rank"]))
+            if cur.get("mode") == "boss":
+                r['damage_hp'] = r.get('damage_hp', round(boss_personal_damage(target or next((u for u in db['users'].values() if u.get('key') == r.get('key')), user), cur), 6))
+        return {"since": cur["start"], "ends": cur["end"], "now": now, "finished": bool(cur.get("finished")), "endless": False,
+                "alltime": False, "season": cur["name"], "rows": rows, "boss": boss_view(cur),
+                "me": {"excluded": False, "rank": place, "total_ton": mine, "damage_hp": round(boss_personal_damage(user, cur), 6) if cur.get("mode") == "boss" else None}, "prizes": prizes}
+    rows = ranking()
+    since = min([h["ts"] for u in rows for h in u["history"]] or [now])
+    out = [
+        {"rank": i + 1, "key": u["key"], "name": display_name(u), "avatar": avatar(u), "total_ton": ton(u["turnover"]), "me": u["id"] == user["id"], "prize": None}
+        for i, u in enumerate(rows[:50])
+    ]
+    place = next((i + 1 for i, u in enumerate(rows) if u["id"] == user["id"]), 0)
+    return {
+        "since": since,
+        "ends": now,
+        "now": now,
+        "finished": False,
+        "endless": True,
+        "alltime": True,
+        "rows": out,
+        "me": {"excluded": False, "rank": place, "total_ton": ton(user["turnover"])},
+        "prizes": {},
+    }
+
+
+@route("/api/levels")
+def levels(user, body):
+    rows = sorted(db["users"].values(), key=lambda u: u["turnover"], reverse=True)
+    rows = [u for u in rows if u["games"] > 0]
+    out = [
+        {
+            "rank": i + 1,
+            "key": u["key"],
+            "name": display_name(u),
+            "avatar": avatar(u),
+            "level": level_info(u["turnover"])["level"],
+            "me": u["id"] == user["id"],
+        }
+        for i, u in enumerate(rows[:50])
+    ]
+    place = next((i + 1 for i, u in enumerate(rows) if u["id"] == user["id"]), 0)
+    return {"rows": out, "me": {"excluded": False, "rank": place, "level": level_info(user["turnover"])["level"]}}
+
+
+@route("/api/player")
+def player(user, body):
+    other = next((u for u in db["users"].values() if u["key"] == body.get("key")), None)
+    if not other:
+        raise ApiError("not_found", 404)
+    return {
+        "player": {
+            "name": display_name(other),
+            "avatar": avatar(other),
+            "level": level_info(other["turnover"]),
+            "stats": {"best": best_prize(other), "turnover_ton": ton(other["turnover"]), "games": other["games"],
+                      "mode_games": game_progress(other)["modes"], "max_multiplier": game_progress(other)["max_multiplier"],
+                      "unclassified_games": game_progress(other)["unclassified_games"]},
+        }
+    }
+
+
+def require_admin(user):
+    if not is_admin(user):
+        raise ApiError("forbidden", 403)
+
+
+@route("/api/admin/log")
+def admin_log(user, body):
+    require_admin(user)
+    try:
+        limit = min(300, max(1, int(body.get("limit") or 100)))
+    except (TypeError, ValueError):
+        limit = 100
+    return {"rows": list(reversed(db.get("admin_log", [])[-limit:]))}
+
+
+@route("/api/admin/sections")
+def admin_sections(user, body):
+    require_admin(user)
+    return {"sections": section_config(), "labels": SECTION_LABELS}
+
+
+@route("/api/admin/sections/save")
+def admin_sections_save(user, body):
+    require_admin(user)
+    values = body.get("sections")
+    if not isinstance(values, dict) or not values or any(key not in SECTION_LABELS or type(value) is not bool for key, value in values.items()):
+        raise ApiError("bad_request")
+    updated = section_config()
+    updated.update(values)
+    db["settings"]["sections"] = updated
+    return {"ok": True, "sections": updated, "labels": SECTION_LABELS}
+
+
+def admin_access_config(user):
+    rows = []
+    for uid in sorted(effective_admin_ids(), key=lambda value: int(value) if value.isdigit() else 0):
+        player = db["users"].get("tg" + uid, {})
+        rows.append({"telegram_id": uid, "name": player.get("first_name") or "Администратор",
+                     "username": player.get("username", ""), "owner": uid == OWNER_ADMIN_ID,
+                     "self": user["id"] == "tg" + uid})
+    return {"rows": rows}
+
+
+@route("/api/admin/admins")
+def admin_admins(user, body):
+    require_admin(user)
+    return admin_access_config(user)
+
+
+@route("/api/admin/admins/save")
+def admin_admins_save(user, body):
+    require_admin(user)
+    uid = str(body.get("telegram_id") or "").strip()
+    if not re.fullmatch(r"[1-9][0-9]{0,19}", uid) or body.get("action") not in ("add", "remove"):
+        raise ApiError("admin_id_invalid")
+    if uid == OWNER_ADMIN_ID and body["action"] == "remove":
+        raise ApiError("admin_owner_protected")
+    enabled = body["action"] == "add"
+    db["settings"].setdefault("admin_access", {})[uid] = enabled
+    changes = db["settings"].setdefault("admin_access_log", [])
+    changes.append({"telegram_id": uid, "action": body["action"], "by": user["id"], "ts": int(time.time())})
+    del changes[:-100]
+    return {"ok": True, **admin_access_config(user), "self_removed": not enabled and user["id"] == "tg" + uid}
+
+
+
+def admin_session_user():
+    if session.get("admin_exp", 0) <= time.time():
+        return None
+    user = db["users"].get(session.get("admin_uid"))
+    return user if user and is_admin(user) else None
+
+
+@route("/api/admin/session")
+def admin_session_ticket(user, body):
+    require_admin(user)
+    now = int(time.time())
+    tickets = db.setdefault("admin_tickets", {})
+    for key in list(tickets):
+        if tickets[key]["expires"] <= now:
+            del tickets[key]
+    ticket = secrets.token_urlsafe(32)
+    tickets[hashlib.sha256(ticket.encode()).hexdigest()] = {"uid": user["id"], "expires": now + 120}
+    return {"ticket": ticket, "expires": now + 120}
+
+
+@app.get("/admin")
+@app.get("/admin/")
+def admin_page():
+    user = admin_session_user()
+    response = app.make_response(render_template("admin.html", csrf=session.get("admin_csrf", "") if user else ""))
+    response.headers["Cache-Control"] = "private, no-store"
+    response.headers["Referrer-Policy"] = "no-referrer"
+    return response
+
+
+@app.post("/admin/login")
+def admin_login():
+    body = request.get_json(silent=True) or {}
+    ticket = str(body.get("ticket") or "")
+    digest = hashlib.sha256(ticket.encode()).hexdigest()
+    with lock:
+        row = db.get("admin_tickets", {}).pop(digest, None)
+        user = db["users"].get(row["uid"]) if row else None
+        save_db()
+        if not row or row["expires"] <= time.time() or not user or not is_admin(user):
+            raise ApiError("forbidden", 403)
+        session.clear()
+        session.permanent = True
+        session.update(admin_uid=user["id"], admin_exp=int(time.time()) + 8 * 3600, admin_csrf=secrets.token_urlsafe(32))
+    return {"ok": True}
+
+
+@app.post("/admin/logout")
+def admin_logout():
+    csrf = request.headers.get("X-Admin-CSRF", "")
+    if not csrf or not hmac.compare_digest(csrf, session.get("admin_csrf", "")):
+        raise ApiError("csrf_failed", 403)
+    session.clear()
+    return {"ok": True}
+
+
+@route("/api/admin/overview")
+def admin_overview(user, body):
+    require_admin(user)
+    try:
+        days = int(body.get("days", 30))
+    except (ValueError, TypeError, OverflowError):
+        raise ApiError("bad_request")
+    scope = body.get("scope", "real")
+    if days not in (1, 7, 30, 90) or scope not in ("real", "demo"):
+        raise ApiError("bad_request")
+    result = overview(db, days, scope)
+    result["bot"]["configured"] = bool(BOT_TOKEN)
+    result["admin_name"] = display_name(user)
+    result["storage"] = storage_info()
+    return result
+
+
+@route("/api/admin/finance/entry")
+def admin_finance_entry(user, body):
+    require_admin(user)
+    try:
+        entry = finance_entry(db, user, body)
+    except (ValueError, TypeError, OverflowError):
+        raise ApiError("bad_request")
+    return {"entry": {k: v for k, v in entry.items() if k not in ("admin", "request_id")}}
+
+
+@route("/api/admin/theme")
+def admin_theme(user, body):
+    require_admin(user)
+    try:
+        return events_lib.update(db, body)
+    except (ValueError, TypeError, OverflowError) as exc:
+        raise ApiError("bad_request", field=str(exc))
+
+
+@route("/api/admin/event")
+def admin_event(user, body):
+    return admin_theme(user, body)
+
+
+@route("/api/admin/kostyan")
+def admin_kostyan(user, body):
+    require_admin(user)
+    try:
+        return dialogues_lib.update(db, body)
+    except (ValueError, TypeError) as exc:
+        raise ApiError("bad_request", field=str(exc))
+
+
+def find_user(key):
+    target = next((u for u in db["users"].values() if u["key"] == key), None)
+    if not target:
+        raise ApiError("not_found", 404)
+    return target
+
+
+def admin_user_row(u):
+    return {
+        "key": u["key"],
+        "id": u["id"],
+        "name": display_name({**u, "anon": False}),
+        "username": u["username"],
+        "balance_ton": ton(u["balance"]),
+        "hatcoin": round(hatcoin_balance(u), 6),
+        "turnover_ton": ton(u["turnover"]),
+        "games": u["games"],
+        "seen": u.get("seen", 0),
+        "created": u.get("created", 0),
+        "prizes": sum(1 for p in u.get("prizes", []) if p.get("status") != "sold"),
+        "has_wallet": bool(u.get("wallet")),
+        "banned": bool(u.get("banned")),
+        "note": bool(u.get("note")),
+        "admin": is_admin(u),
+    }
+
+
+def admin_user_detail(u):
+    return {
+        **admin_user_row(u),
+        "deposits": _player_deposits(u['id'], limit=100),
+        "game_result": player_game_result(u),
+        "free_spin_coins": free_coin_balance(u),
+        "telegram_stars_rating": u.get('telegram_stars_rating', {"verified": False}),
+        "referral_qualified": referral_qualified(u),
+        "wallet": u["wallet"],
+        "turnover_ton": ton(u["turnover"]),
+        "stars_lock_until": int(u.get("stars_lock_until", 0) or 0),
+        "hatcoin": round(hatcoin_balance(u), 6),
+        "note_text": str(u.get("note") or ""),
+        "tour_done": bool(u.get("tour_done")),
+        "weapons": [w for w in (u.get("weapons") or []) if w in weapons_lib.WEAPONS and not weapons_lib.WEAPONS[w]["default"]],
+        "weapon_catalog": [{"id": k, "name": v["name"], "rarity": v["rarity"], "kind": v.get("kind", "gear")} for k, v in weapons_lib.WEAPONS.items() if not v["default"]],
+        "rtp": {m: {"global": global_rtp(m), "adj": user_rtp_adj(u, m),
+                    "effective": effective_rtp(u, m), "nominal": RTP_NOMINAL[m]} for m in RTP_MODES},
+        "prizes": [
+            {"id": p["id"], "name": p["name"], "status": p["status"], "value_ton": p["value"], "tier": p["tier"], "image": p.get("image", "")}
+            for p in reversed(u["prizes"])
+            if p["status"] != "sold"
+        ],
+    }
+
+
+ADMIN_USER_SORTS = {
+    "seen": lambda u: u.get("seen", 0),
+    "balance": lambda u: u.get("balance", 0),
+    "hatcoin": lambda u: u.get("hatcoin_units", 0),
+    "turnover": lambda u: u.get("turnover", 0),
+    "games": lambda u: u.get("games", 0),
+    "created": lambda u: u.get("created", 0),
+}
+
+
+@route("/api/admin/users")
+def admin_users(user, body):
+
+    require_admin(user)
+    q = str(body.get("q", "")).strip().lower().lstrip("@")
+    flt = str(body.get("filter") or "all")
+    sort = str(body.get("sort") or "seen")
+    if sort not in ADMIN_USER_SORTS:
+        sort = "seen"
+    try:
+        offset = max(0, int(body.get("offset") or 0))
+        limit = min(100, max(1, int(body.get("limit") or 50)))
+    except (TypeError, ValueError):
+        offset, limit = 0, 50
+    now = int(time.time())
+    users = list(db["users"].values())
+    rows = users
+    if q:
+        rows = [u for u in rows if q in u["id"].lower() or q in u["key"] or q in u["username"].lower() or q in u["first_name"].lower()
+                or q in str(u.get("wallet") or "").lower()]
+    checks = {
+        "online": lambda u: now - u.get("seen", 0) < 86400,
+        "balance": lambda u: u.get("balance", 0) > 0 or u.get("hatcoin_units", 0) > 0,
+        "prizes": lambda u: any(p.get("status") != "sold" for p in u.get("prizes", [])),
+        "banned": lambda u: bool(u.get("banned")),
+        "admin": lambda u: is_admin(u),
+        "wallet": lambda u: bool(u.get("wallet")),
+    }
+    if flt in checks:
+        rows = [u for u in rows if checks[flt](u)]
+    rows = sorted(rows, key=ADMIN_USER_SORTS[sort], reverse=body.get("dir") != "asc")
+    return {"rows": [admin_user_row(u) for u in rows[offset:offset + limit]], "total": len(users), "matched": len(rows),
+            "summary": {"online24h": sum(1 for u in users if now - u.get("seen", 0) < 86400),
+                        "with_balance": sum(1 for u in users if u.get("balance", 0) > 0 or u.get("hatcoin_units", 0) > 0),
+                        "banned": sum(1 for u in users if u.get("banned")),
+                        "balance_total": ton(sum(u.get("balance", 0) for u in users))}}
+
+
+@route("/api/admin/user/flags")
+def admin_user_flags(user, body):
+
+    require_admin(user)
+    target = find_user(body.get("key"))
+    if "banned" in body:
+        if is_admin(target) and body["banned"] is True:
+            raise ApiError("bad_request", 400, message="Администратора заблокировать нельзя.")
+        target["banned"] = body["banned"] is True
+    if "note" in body:
+        target["note"] = str(body.get("note") or "").strip()[:300]
+    if body.get("reset_tour") is True:
+        target["tour_done"] = False
+        target["tour_sections"] = []
+    return {"user": admin_user_detail(target)}
+
+
+@route("/api/admin/user")
+def admin_user(user, body):
+    require_admin(user)
+    return {"user": admin_user_detail(find_user(body.get("key")))}
+
+
+def rtp_overview():
+    adjusted = [{"key": u["key"], "name": display_name({**u, "anon": False}), "adj": {m: user_rtp_adj(u, m) for m in RTP_MODES}}
+                for u in db["users"].values() if any(user_rtp_adj(u, m) for m in RTP_MODES)]
+    return {"modes": [{"mode": m, "global": global_rtp(m), "nominal": RTP_NOMINAL[m]} for m in RTP_MODES],
+            "adjusted": adjusted[:200]}
+
+
+@route("/api/admin/rtp")
+def admin_rtp(user, body):
+    require_admin(user)
+    return rtp_overview()
+
+
+@route("/api/admin/rtp/save")
+def admin_rtp_save(user, body):
+    require_admin(user)
+    saved = dict(db["settings"].get("rtp") or {})
+    for mode in RTP_MODES:
+        if mode in body:
+            saved[mode] = _rtp_number(body[mode], RTP_MIN, RTP_MAX)
+    db["settings"]["rtp"] = saved
+    return rtp_overview()
+
+
+@route("/api/admin/user/rtp")
+def admin_user_rtp(user, body):
+    require_admin(user)
+    target = find_user(body.get("key"))
+    adj = dict(target.get("rtp_adj") or {})
+    for mode in RTP_MODES:
+        if mode in body:
+            value = _rtp_number(body[mode], -RTP_MAX, RTP_MAX)
+            if value:
+                adj[mode] = value
+            else:
+                adj.pop(mode, None)
+    target["rtp_adj"] = adj
+    return {"user": admin_user_detail(target)}
+
+
+@route("/api/admin/balance")
+def admin_balance(user, body):
+    require_admin(user)
+    target = find_user(body.get("key"))
+    try:
+        amount = float(body.get("amount"))
+    except (TypeError, ValueError):
+        raise ApiError("bad_request")
+    if body.get("mode") == "set":
+        if amount < 0:
+            raise ApiError("bad_request")
+        target["balance"] = ton(amount)
+    elif body.get("mode") == "add":
+        target["balance"] = ton(max(0.0, target["balance"] + amount))
+        if body.get("deposit") is True and amount > 0:
+            credit_referral_bonus(target, amount)
+    else:
+        raise ApiError("bad_request")
+    return {"user": admin_user_detail(target)}
+
+
+@route("/api/admin/prize/add")
+def admin_prize_add(user, body):
+    require_admin(user)
+    target = find_user(body.get("key"))
+    if body.get("gift"):
+        prize = resolve_target({"gift": body["gift"], "model": body.get("model", "")}, "gift")
+    else:
+        prize = resolve_target({}, body.get("tier", "random"))
+    add_prize(target, prize["tier"], prize["name"], prize["value"], prize["image"])
+    return {"user": admin_user_detail(target)}
+
+
+@route("/api/admin/prize/remove")
+def admin_prize_remove(user, body):
+    require_admin(user)
+    target = find_user(body.get("key"))
+    prize = next((p for p in target["prizes"] if p["id"] == body.get("prize_id") and p["status"] != "sold"), None)
+    if not prize:
+        raise ApiError("not_found", 404)
+    if staking_prize_locked(prize):
+        raise ApiError("staking_locked", 409, message="Сначала дождитесь окончания блокировки шляпы.")
+    target["prizes"].remove(prize)
+    return {"user": admin_user_detail(target)}
+
+
+def normalize(text):
+    return "".join(ch for ch in str(text).lower() if ch.isalnum())
+
+
+def market_rows():
+    return [
+        {"slug": s, "name": g["name"], "price_ton": gift_floor(s),
+         "default_ton": g["floor"], "custom": s in db["prices"],
+         "models": len([m for m in g.get("models", []) if m.get("floor", 0) > 0]),
+         "source": g.get("source", "")}
+        for s, g in sorted(gifts_map().items(), key=lambda kv: kv[1]["name"].lower())
+    ]
+
+
+class PortalsError(Exception):
+    pass
+
+
+from collections import deque
+MARKET_LOG = deque(maxlen=600)
+_market_log_id = [0]
+_market_log_lock = threading.Lock()
+
+
+def mlog(src, level, msg):
+
+    with _market_log_lock:
+        _market_log_id[0] += 1
+        MARKET_LOG.append({"id": _market_log_id[0], "t": int(time.time()), "src": src, "level": level, "msg": str(msg)[:400]})
+
+
+PORTALS_STATE = {"running": False, "error": "", "updated": 0, "gifts": 0, "models": 0, "source": ""}
+MRKT_STATE = {"running": False, "error": "", "updated": 0, "checked": 0, "models": 0, "total": 0, "failed": 0}
+MRKT_MODELS_PAYLOAD = {"key": "collectionName"}
+_filters_first = {"i": 0}
+
+
+def portals_status():
+    return {
+        "active_market": db.get("settings", {}).get("active_market", "portals"),
+        "portals_configured": bool(portals_auth()),
+        "portals_key_set": bool(portals_auth()),
+        "portals_key_mask": mask_key(portals_auth()),
+        "portals_refreshing": PORTALS_STATE["running"],
+        "portals_error": PORTALS_STATE["error"],
+        "portals_updated": PORTALS_STATE["updated"],
+        "portals_gifts": len(CATALOG),
+        "portals_models": sum(len(g.get("models", [])) for g in CATALOG.values()),
+        "catalog_source": PORTALS_STATE.get("source") or "Сохранённый каталог",
+        "mrkt_key_mask": mask_key(db.get("settings", {}).get("mrkt_auth", "")),
+        "mrkt_refreshing": MRKT_STATE["running"],
+        "mrkt_error": MRKT_STATE["error"],
+        "mrkt_checked": MRKT_STATE["checked"],
+        "mrkt_models": MRKT_STATE["models"],
+        "mrkt_total": MRKT_STATE["total"],
+        "mrkt_failed": MRKT_STATE["failed"],
+        "mrkt_updated": MRKT_STATE["updated"],
+        "market_total": len(CATALOG),
+        "market_models": sum(len(g.get("models", [])) for g in CATALOG.values()),
+    }
+
+
+def portals_headers(with_auth=True):
+
+    auth = portals_auth() if with_auth else ""
+    headers = {"Accept": "application/json", "User-Agent": "HatDrop/1.0"}
+    if auth:
+        low = auth.lower()
+        if low.startswith("partners "):
+            auth = "Bearer " + auth[9:].strip()
+        elif not low.startswith(("tma ", "bearer ")):
+            auth = ("tma " if "hash=" in auth and "auth_date=" in auth else "Bearer ") + auth
+        headers["Authorization"] = auth
+    return headers
+
+
+_host_first = {"i": 0}
+
+
+def portals_get(paths, public_ok=False, timeout=20):
+
+    errors = []
+    auth_rejected = False
+    order = PORTALS_HOSTS[_host_first["i"]:] + PORTALS_HOSTS[:_host_first["i"]]
+    for attempt_auth in ((True, False) if public_ok else (True,)):
+        if not attempt_auth and not auth_rejected and portals_auth():
+            break
+        headers = portals_headers(attempt_auth)
+        mode = "с ключом" if "Authorization" in headers else "без ключа"
+        if attempt_auth and "Authorization" not in headers and not public_ok:
+            raise PortalsError("ключ не задан")
+        for host in order:
+            host_dead = False
+            for path in paths:
+                short = path.split("?")[0]
+                noisy = short.startswith("/collections/filters")
+                t0 = time.time()
+                try:
+                    req = urllib.request.Request(host + path, headers=headers)
+                    with urllib.request.urlopen(req, timeout=timeout) as resp:
+                        data = json.load(resp)
+                    _host_first["i"] = PORTALS_HOSTS.index(host)
+                    if not noisy:
+                        mlog("portals", "ok", f"GET {host.split('//')[1]}{short} ({mode}) -> 200, {int((time.time() - t0) * 1000)} мс")
+                    return data
+                except urllib.error.HTTPError as e:
+                    if e.code == 429:
+                        mlog("portals", "error", f"GET {short} ({mode}) -> HTTP 429, лимит запросов")
+                        raise PortalsError("лимит запросов Portals (HTTP 429)")
+                    if e.code in (401, 403):
+                        auth_rejected = True
+                        errors.append(f"ключ отклонён (HTTP {e.code})")
+                        mlog("portals", "error" if not noisy else "warn", f"GET {host.split('//')[1]}{short} ({mode}) -> HTTP {e.code}")
+                        break
+                    errors.append(f"{host.split('//')[1]}{path.split('?')[0]} -> HTTP {e.code}")
+                    mlog("portals", "error", f"GET {host.split('//')[1]}{short} ({mode}) -> HTTP {e.code}")
+                except urllib.error.URLError as e:
+                    errors.append(f"{host.split('//')[1]} недоступен: {e.reason}")
+                    mlog("portals", "error", f"{host.split('//')[1]} недоступен: {e.reason}")
+                    host_dead = True
+                    break
+                except Exception as e:
+                    errors.append(f"{host.split('//')[1]}{path.split('?')[0]} -> {type(e).__name__}")
+                    mlog("portals", "error", f"GET {host.split('//')[1]}{short} -> {type(e).__name__}: {e}")
+            if host_dead:
+                continue
+    if auth_rejected:
+        raise PortalsError("ключ отклонён - вставь свежий Authorization. " + "; ".join(errors[-2:]))
+    raise PortalsError("; ".join(dict.fromkeys(errors)) if errors else "нет ответа")
+
+
+def _num(v):
+    try:
+        x = float(v)
+    except (TypeError, ValueError):
+        return 0.0
+    return x if x > 0 else 0.0
+
+
+def _clean(name):
+
+    return re.sub(r"\s*\([^)]*\)\s*$", "", str(name)).strip()
+
+
+def _floor_of(v):
+    if isinstance(v, dict):
+        for k in ("floor_price", "floorPrice", "floor", "price", "min_price", "min"):
+            if k in v:
+                return _num(v[k])
+        return 0.0
+    return _num(v)
+
+
+def parse_collections(data):
+    items = data
+    if isinstance(data, dict):
+        items = data.get("collections") or data.get("items") or data.get("data") or []
+    out = []
+    for c in items if isinstance(items, list) else []:
+        if not isinstance(c, dict):
+            continue
+        name = str(c.get("name") or c.get("short_name") or "").strip()
+        if not name:
+            continue
+        out.append({
+            "name": name,
+            "short": str(c.get("short_name") or c.get("shortName") or normalize(name)),
+            "id": str(c.get("id") or ""),
+            "floor": _floor_of(c.get("floor_price", c.get("floor", 0))),
+            "volume": _num(c.get("day_volume") or c.get("volume") or 0),
+        })
+    return out
+
+
+def parse_attr_floors(node):
+
+    out = {}
+    if isinstance(node, dict):
+        for k, v in node.items():
+            if str(k).lower() in ("count", "total", "floor_price"):
+                continue
+            if isinstance(v, (dict, int, float, str)) or v is None:
+                name = _clean(k)
+                if name:
+                    out[name] = _floor_of(v)
+    elif isinstance(node, list):
+        for v in node:
+            if isinstance(v, str):
+                if _clean(v):
+                    out[_clean(v)] = 0.0
+            elif isinstance(v, dict):
+                n = v.get("value") or v.get("name") or v.get("model") or v.get("title")
+                if n:
+                    out[_clean(n)] = _floor_of(v)
+    return out
+
+
+def _find_key(node, names, depth=0):
+    if depth > 4:
+        return None
+    if isinstance(node, dict):
+        for n in names:
+            if isinstance(node.get(n), (dict, list)) and node[n]:
+                return node[n]
+        for v in node.values():
+            r = _find_key(v, names, depth + 1)
+            if r:
+                return r
+    return None
+
+
+def parse_filters(data):
+    models = parse_attr_floors(_find_key(data, ("models", "model")))
+    backdrops = parse_attr_floors(_find_key(data, ("backdrops", "backdrop")))
+    return models, backdrops
+
+
+def parse_search_models(data, acc):
+
+    items = data
+    if isinstance(data, dict):
+        items = data.get("results") or data.get("nfts") or data.get("items") or data.get("data") or []
+    n = 0
+    for r in items if isinstance(items, list) else []:
+        if not isinstance(r, dict):
+            continue
+        n += 1
+        model = r.get("model")
+        if not model:
+            for a in r.get("attributes") or []:
+                if isinstance(a, dict) and str(a.get("type", "")).lower() == "model":
+                    model = a.get("value")
+                    break
+        if not model:
+            continue
+        m = _clean(model)
+        price = _num(r.get("price"))
+        if m not in acc or (price and (not acc[m] or price < acc[m])):
+            acc[m] = price
+    return n
+
+
+def apply_tier_values():
+
+    hat = CATALOG.get("WitchHat")
+    if not hat:
+        return
+    TIERS["random"]["value"] = gift_floor("WitchHat")
+    backdrops = {normalize(k): v for k, v in hat.get("backdrops", {}).items()}
+    for tier, keys in (("onyx", ("onyxblack", "onyx")), ("black", ("black",))):
+        for k in keys:
+            if k in backdrops and backdrops[k] > 0:
+                TIERS[tier]["value"] = money(backdrops[k])
+                break
+
+
+def fetch_collection_filters(c, timeout=8):
+
+    short = str(c.get("short") or "").strip().lower()
+    if not short:
+        return {}, {}
+    raw = portals_get(["/collections/filters?short_names=" + quote(short)],
+                      public_ok=True, timeout=timeout)
+    if isinstance(raw, dict):
+        groups = raw.get("collections")
+        if isinstance(groups, dict):
+            entry = next((v for k, v in groups.items() if normalize(k) == normalize(short)), None)
+            if isinstance(entry, dict):
+                raw = entry
+        prices = raw.get("floor_prices") if isinstance(raw, dict) else None
+        if isinstance(prices, dict):
+            entry = next((v for k, v in prices.items() if normalize(k) == normalize(short)), None)
+            if isinstance(entry, dict):
+                raw = entry
+    return parse_filters(raw)
+
+
+def fetch_models_by_search(c, max_pages=15):
+
+    acc = {}
+    last = None
+    for key in [k for k in (c["name"], c["short"], c["id"]) if k]:
+        for page in range(max_pages):
+            path = (f"/nft/search?offset={page * 100}&limit=100&filter_by_collections={quote(key)}"
+                    f"&sort_by=price+asc&status=listed")
+            try:
+                got = parse_search_models(portals_get([path], public_ok=True, timeout=15), acc)
+            except PortalsError as e:
+                last = e
+                if "429" in str(e):
+                    raise
+                break
+            if got < 100:
+                break
+        if acc:
+            return acc
+    if last:
+        raise last
+    return acc
+
+
+def mrkt_model_image(key):
+
+    path = str(key or "").lstrip("/")
+    if path.startswith("gifts/stickers/thumbnails/") and path.lower().endswith(".webp"):
+        return "https://cdn.tgmrkt.io/" + quote(path, safe="/")
+    return ""
+
+
+def _mrkt_post_models(name, field, token, timeout):
+    payload = json.dumps({field: name}, ensure_ascii=False).encode("utf-8")
+    req = urllib.request.Request(
+        "https://api.tgmrkt.io/api/v1/gifts/models", data=payload, method="POST",
+        headers={"Authorization": token, "Content-Type": "application/json",
+                 "Accept": "application/json", "Origin": "https://cdn.tgmrkt.io",
+                 "Referer": "https://cdn.tgmrkt.io/", "User-Agent": "Mozilla/5.0"})
+    with urllib.request.urlopen(req, timeout=timeout) as response:
+        return json.load(response)
+
+
+def mrkt_search_models(c, timeout=12):
+
+    token = str(db.get("settings", {}).get("mrkt_auth") or "").strip()
+    if not token:
+        return {}
+    name = str(c.get("name") or "").strip()
+    if not name:
+        return {}
+    fields = list(dict.fromkeys([MRKT_MODELS_PAYLOAD["key"], "collectionName",
+                                 "collection_id", "collection", "collectionId"]))
+    error = None
+    for field in fields:
+        try:
+            data = _mrkt_post_models(normalize(name) if field == "collectionName" else name, field, token, timeout)
+        except urllib.error.HTTPError as exc:
+            if exc.code in (401, 403, 429):
+                raise PortalsError(f"MRKT /gifts/models -> HTTP {exc.code} (доступ/лимит)")
+            error = f"MRKT /gifts/models ({field}) -> HTTP {exc.code}"
+            continue
+        except (urllib.error.URLError, TimeoutError) as exc:
+            raise PortalsError(f"MRKT /gifts/models недоступен: {exc}")
+        except (ValueError, json.JSONDecodeError) as exc:
+            error = f"MRKT вернул не JSON: {exc}"
+            continue
+
+        rows = data if isinstance(data, list) else (
+            data.get("models") or data.get("items") or data.get("data") or []
+            if isinstance(data, dict) else [])
+        if isinstance(rows, dict):
+            rows = rows.get("items") or rows.get("models") or []
+        if not isinstance(rows, list):
+            error = f"MRKT /gifts/models ({field}): неизвестный формат ответа"
+            continue
+        result = {}
+        for item in rows:
+            if not isinstance(item, dict):
+                continue
+            collection_name = str(item.get("collectionName") or item.get("collectionTitle") or "")
+            if collection_name and normalize(collection_name) != normalize(name):
+                continue
+            model = _clean(item.get("modelName") or item.get("modelTitle") or "")
+            raw = item.get("floorPriceNanoTons")
+            if not model or raw is None:
+                continue
+            try:
+                price = ton(Decimal(str(raw)) / Decimal(1_000_000_000))
+            except (ValueError, ArithmeticError, TypeError):
+                continue
+            if price <= 0:
+                continue
+            old = result.get(model)
+            if old and old["floor"] <= price:
+                continue
+            rarity = item.get("rarityPerMille")
+            result[model] = {
+                "floor": price, "source": "mrkt",
+                "image": mrkt_model_image(item.get("modelStickerThumbnailKey")),
+                "rarity_per_mille": rarity if isinstance(rarity, int) else None
+            }
+        if result:
+            MRKT_MODELS_PAYLOAD["key"] = field
+            return result
+        error = f"MRKT /gifts/models ({field}) вернул 0 моделей для {name}"
+    raise PortalsError(error or f"MRKT не вернул модели коллекции {name}")
+
+def fetch_collection_models(c, search=False, timeout=10):
+    source = db.get("settings", {}).get("active_market", "portals")
+    if source == "mrkt":
+        return mrkt_search_models(c, timeout=min(timeout, 10)), {}
+    if source == "portals":
+        floors, backs = fetch_collection_filters(c, timeout=min(timeout, 10))
+        return {k: {"floor": v, "source": "portals"} for k, v in floors.items() if v > 0}, backs
+    return {}, {}
+
+def build_models(models):
+
+    result = []
+    for name, item in models.items():
+        metadata = item if isinstance(item, dict) else {"floor": item}
+        try:
+            floor = ton(metadata.get("floor", 0))
+        except (ValueError, TypeError, OverflowError):
+            floor = 0.0
+        result.append({"model": name, "floor": floor,
+                       "image": metadata.get("image", ""),
+                       "rarity_per_mille": metadata.get("rarity_per_mille"),
+                       "source": metadata.get("source", "")})
+    return sorted(result, key=lambda x: (x["floor"] <= 0, x["floor"], x["model"].lower()))
+
+MODEL_FAIL = {}
+MODEL_LOCKS = {}
+MODEL_LOADING = set()
+
+
+def start_models_fetch(slug):
+    if slug not in CATALOG or CATALOG[slug].get("models") or slug in MODEL_LOADING:
+        return
+    if time.time() - MODEL_FAIL.get(slug, 0) < 45:
+        return
+    MODEL_LOADING.add(slug)
+    def run():
+        try:
+            ensure_models(slug)
+        finally:
+            MODEL_LOADING.discard(slug)
+    threading.Thread(target=run, daemon=True).start()
+
+
+def ensure_models(slug):
+
+    with lock:
+        entry = CATALOG.get(slug)
+        if not entry or entry.get("models"):
+            return
+        if time.time() - MODEL_FAIL.get(slug, 0) < 30:
+            return
+        c = {"name": entry["name"], "short": entry.get("short") or normalize(entry["name"]), "id": entry.get("id", "")}
+        slot = MODEL_LOCKS.setdefault(slug, threading.Lock())
+    with slot:
+        with lock:
+            cur = CATALOG.get(slug)
+            if not cur or cur.get("models"):
+                return
+        try:
+            models, backdrops = fetch_collection_models(c, search=False, timeout=8)
+        except PortalsError as e:
+            PORTALS_STATE["error"] = f"{c['name']}: {e}"
+            MODEL_FAIL[slug] = time.time()
+            return
+        if not models:
+            MODEL_FAIL[slug] = time.time()
+            return
+        with lock:
+            cur = CATALOG.get(slug)
+            if cur is not None:
+                cur["models"] = build_models(models)
+                if backdrops:
+                    cur["backdrops"] = {b: money(f) for b, f in backdrops.items()}
+                if slug == "WitchHat":
+                    apply_tier_values()
+                save_catalog()
+            for k in [k for k in IMG_CACHE if k and k[0] == slug]:
+                IMG_CACHE.pop(k, None)
+
+
+import html
+import json
+import re
+import urllib.request
+from urllib.parse import urljoin
+
+RASSWET_CACHE = "https://raw.githubusercontent.com/Rasswetik/RasswetGifts/main/data/fragment_catalog_cache.json"
+FRAGMENT = "https://fragment.com"
+USER_AGENT = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
+
+
+def trusted_image(url):
+    url = str(url or "").strip()
+    if url.startswith("//"):
+        url = "https:" + url
+    elif url.startswith("/"):
+        url = urljoin(FRAGMENT, url)
+    if url.startswith((
+        "https://fragment.com/file/",
+        "https://cdn.changes.tg/",
+        "https://cdn.tgmrkt.io/gifts/stickers/thumbnails/"
+    )):
+        return url
+    return ""
+
+
+def fetch_text(url, timeout=20, max_bytes=12_000_000):
+    req = urllib.request.Request(url, headers={
+        "User-Agent": USER_AGENT,
+        "Accept": "text/html,application/json;q=0.9,*/*;q=0.8",
+    })
+    with urllib.request.urlopen(req, timeout=timeout) as response:
+        data = response.read(max_bytes + 1)
+    if len(data) > max_bytes:
+        raise ValueError("Source catalog too large")
+    return data.decode("utf-8-sig", errors="replace")
+
+
+def positive_ton(v):
+    try:
+        n = float(v)
+        return round(n, 6) if 0 < n < 1_000_000 else 0.0
+    except (ValueError, OverflowError, TypeError):
+        return 0.0
+
+
+def parse_rasswet_snapshot(data):
+
+    gifts = data.get("gifts") or []
+    all_models = data.get("models") or {}
+    if not isinstance(gifts, list) or not isinstance(all_models, dict):
+        raise ValueError("Unexpected RasswetGifts catalog format")
+    result = {}
+    for gift in gifts:
+        if not isinstance(gift, dict):
+            continue
+        name = str(gift.get("name") or "").strip()
+        fragment_slug = str(gift.get("fragment_slug") or "").strip()
+        if not name or not fragment_slug:
+            continue
+        floor = (positive_ton(gift.get("getgems_floor_ton"))
+                 or positive_ton(gift.get("fragment_price_ton"))
+                 or positive_ton(float(gift.get("value") or 0) / 100)
+                 or 0.0)
+        models = {}
+        for item in (all_models.get(fragment_slug) or []):
+            if not isinstance(item, dict):
+                continue
+            model = str(item.get("model_name") or "").strip()
+            if not model:
+                continue
+            model_floor = positive_ton(item.get("getgems_model_floor_ton"))
+
+            fallback_floor = positive_ton(item.get("getgems_floor_ton")) or floor
+            models[model] = {
+                "model": model,
+                "floor": model_floor or fallback_floor,
+                "image": trusted_image(item.get("image")),
+                "source": "rasswet-getgems" if model_floor else "fragment-estimate",
+            }
+        result[name] = {
+            "name": name, "short": fragment_slug, "id": "",
+            "floor": floor, "pop": 0,
+            "models": list(models.values()), "backdrops": {},
+            "image": trusted_image(gift.get("image")),
+        }
+    if not result:
+        raise ValueError("No collections in RasswetGifts catalog")
+    return result
+
+
+def fetch_rasswet_snapshot():
+    return parse_rasswet_snapshot(json.loads(fetch_text(RASSWET_CACHE, timeout=25)))
+
+
+def parse_fragment_collections(page):
+
+    result = {}
+    for match in re.finditer(r'<a\s+href="/gifts/([a-z0-9_-]+)"', page):
+        short = match.group(1).lower()
+        chunk = page[match.start():match.start() + 800]
+        name_match = re.search(r'class="[^"]*tm-main-filters-name[^"]*"[^>]*>([^<]+)', chunk)
+        name = html.unescape(name_match.group(1).strip()) if name_match else short
+        image_match = re.search(r'<img[^>]+src="([^"]+)"', chunk)
+        result[name] = {
+            "name": name, "short": short, "id": "",
+            "floor": 0, "pop": 0, "models": [], "backdrops": {},
+            "image": trusted_image(image_match.group(1) if image_match else ""),
+        }
+    if not result:
+        raise ValueError("Fragment returned no collections")
+    return result
+
+
+def fetch_fragment_catalog():
+    return parse_fragment_collections(fetch_text(FRAGMENT + "/gifts", timeout=16))
+
+
+def parse_fragment_models(page):
+
+    models = {}
+    pattern = r'class="[^"]*js-attribute-item[^"]*"[^>]*data-value="([^"]*)"'
+    for match in re.finditer(pattern, page):
+        chunk = page[match.start():match.start() + 650]
+        img = re.search(r'src="([^"]*?/model\.[^"]+)"', chunk)
+        if not img:
+            continue
+        title = re.search(r'class="[^"]*tm-main-filters-name[^"]*"[^>]*>([^<]+)', chunk)
+        name = html.unescape(title.group(1).strip() if title else match.group(1).strip())
+        if name and name not in models:
+            models[name] = {
+                "floor": 0, "image": trusted_image(img.group(1)),
+                "source": "fragment-no-model-floor"
+            }
+    return models
+
+
+def fetch_fragment_models(fragment_slug):
+    slug = str(fragment_slug or "").strip().lower()
+    if not re.fullmatch(r"[a-z0-9_-]{2,80}", slug):
+        return {}
+    page = fetch_text(FRAGMENT + "/gifts/" + slug, timeout=16, max_bytes=4_000_000)
+    return parse_fragment_models(page)
+
+
+def _merge_source_catalog(source):
+
+    with lock:
+        for name, fresh in source.items():
+            slug = re.sub(r"[^A-Za-z0-9]", "", name) or normalize(name)
+            old = CATALOG.get(slug, {})
+            merged = dict(old or fresh)
+            merged["name"] = name
+            merged["short"] = fresh.get("short") or old.get("short") or normalize(name)
+            if fresh.get("image"):
+                merged["image"] = fresh["image"]
+            if fresh.get("floor", 0) > 0 and (not old.get("floor") or old.get("floor") == 1):
+                merged["floor"] = fresh["floor"]
+            merged.setdefault("floor", 1.0)
+            merged.setdefault("pop", 0)
+            merged.setdefault("backdrops", {})
+            models = {m["model"]: dict(m) for m in fresh.get("models", [])}
+            for m in old.get("models", []):
+                prior = models.get(m["model"])
+                if not prior or m.get("source") == "mrkt" or (
+                        m.get("floor", 0) > 0 and not prior.get("floor")):
+                    models[m["model"]] = dict(m)
+                elif not prior.get("image") and m.get("image"):
+                    prior["image"] = m["image"]
+            merged["models"] = build_models(models)
+            CATALOG[slug] = merged
+        apply_tier_values()
+        save_catalog()
+    IMG_CACHE.clear()
+
+
+def _canonical_catalog_key(name):
+    cleaned = normalize(name)
+    canonical = next((slug for slug, (n, *rest) in GIFTS.items()
+                      if normalize(n) == cleaned), None)
+    return canonical or re.sub(r"[^A-Za-z0-9]", "", name)
+
+
+def _publish_source_catalog(items, source, generation):
+
+    if db["settings"].get("active_market") != source or db["settings"].get("market_generation", 0) != generation:
+        return False
+    clean = {}
+    for item in items:
+        name = str(item.get("name") or "").strip()
+        base_floor = ton(item.get("floor") or 0)
+        if not name or base_floor <= 0:
+            continue
+        slug = _canonical_catalog_key(name)
+        if not slug:
+            continue
+        models = [m for m in item.get("models", []) if (m.get("floor") or 0) > 0]
+        row = {"name": name, "short": item.get("short") or normalize(name),
+               "id": item.get("id") or "", "floor": base_floor,
+               "pop": item.get("pop") or 0, "source": source,
+               "image": item.get("image") or "",
+               "models": models, "backdrops": item.get("backdrops") or {}}
+
+        old = clean.get(slug)
+        if not old or len(row["models"]) > len(old["models"]):
+            clean[slug] = row
+    if not clean:
+        return False
+    with lock:
+        if db["settings"].get("active_market") != source or db["settings"].get("market_generation", 0) != generation:
+            return False
+        CATALOG.clear()
+        CATALOG.update(clean)
+        db["prices"].clear()
+        apply_tier_values()
+        save_catalog()
+        save_db()
+    IMG_CACHE.clear()
+    return True
+
+
+def portals_refresh_worker():
+    if PORTALS_STATE["running"] or db["settings"].get("active_market") != "portals":
+        return
+    PORTALS_STATE.update(running=True, error="", source="Portals")
+    generation = db["settings"].get("market_generation", 0)
+    mlog("portals", "info", f"Старт загрузки Portals. Ключ: {mask_key(portals_auth()) if portals_auth() else 'не задан, пробую без ключа'}")
+    try:
+
+
+        response = portals_get(["/collections?limit=5000", "/collections?limit=500"],
+                               public_ok=True, timeout=12)
+        collections = parse_collections(response)
+        mlog("portals", "info", f"Получено коллекций: {len(collections)}, с ценой: {sum(1 for c in collections if c['floor'] > 0)}")
+        if not collections:
+            raise PortalsError("Portals вернул 0 коллекций — данные не заменены")
+        from concurrent.futures import ThreadPoolExecutor, as_completed
+        rows = [{"name": c["name"], "short": c["short"], "id": c["id"],
+                 "floor": c["floor"], "pop": c["volume"], "models": [],
+                 "image": f"https://portal-market.com/collection_previews/{c['short']}.webp"}
+                for c in collections if c["floor"] > 0]
+
+
+        _publish_source_catalog(rows, "portals", generation)
+        by_short = {normalize(row["name"]): row for row in rows}
+        errors = []
+        deadline = time.time() + 300
+        stats = {"ok": 0, "fail": 0}
+        def task(c):
+            if time.time() > deadline or (stats["ok"] == 0 and stats["fail"] >= 16):
+                raise PortalsError("загрузка прервана: Portals не отвечает или отклоняет ключ")
+            try:
+                out = fetch_collection_filters(c, timeout=9)
+            except Exception:
+                stats["fail"] += 1
+                raise
+            stats["ok"] += 1
+            if stats["ok"] % 25 == 0:
+                mlog("portals", "info", f"Модели: загружено коллекций {stats['ok']}, ошибок {stats['fail']}")
+            return c, out
+        if rows:
+            with ThreadPoolExecutor(max_workers=8) as executor:
+                futures = [executor.submit(task, c) for c in collections if c["floor"] > 0]
+                for future in as_completed(futures):
+                    try:
+                        c, (models, backs) = future.result()
+                        target = by_short.get(normalize(c["name"]))
+                        if target:
+                            target["models"] = build_models({
+                                n: {"floor": price, "source": "portals"}
+                                for n, price in models.items() if price > 0})
+                            target["backdrops"] = backs
+                    except Exception as exc:
+                        if len(errors) < 3:
+                            errors.append(str(exc))
+                            mlog("portals", "warn", f"Коллекция пропущена: {exc}")
+        with_prices = sum(len(r["models"]) for r in rows)
+        mlog("portals", "info", f"Модели готовы: {with_prices} моделей с ценами, ошибок {stats['fail']}")
+        if with_prices == 0:
+            raise PortalsError("Portals: 0 моделей с ценами; " +
+                               (errors[0] if errors else "API фильтров пуст"))
+        if not _publish_source_catalog(rows, "portals", generation):
+            raise PortalsError("Не удалось сохранить новый каталог Portals")
+        PORTALS_STATE.update(updated=int(time.time()), gifts=len(CATALOG),
+                             models=with_prices, source="Portals",
+                             error=("Часть коллекций без моделей: " + errors[0]) if errors else "")
+        mlog("portals", "ok", f"Готово: подарков {len(CATALOG)}, моделей {with_prices}")
+    except Exception as exc:
+        PORTALS_STATE["error"] = str(exc)
+        mlog("portals", "error", f"Загрузка остановлена: {exc}")
+    finally:
+        PORTALS_STATE["running"] = False
+
+def start_portals_refresh():
+    if db["settings"].get("active_market") == "portals" and PORTALS_STATE["running"]:
+        mlog("portals", "info", "Загрузка уже идёт")
+    if db["settings"].get("active_market") == "portals" and not PORTALS_STATE["running"]:
+        PORTALS_STATE["running"] = True
+        def run():
+            PORTALS_STATE["running"] = False
+            portals_refresh_worker()
+        threading.Thread(target=run, daemon=True).start()
+
+
+MARKET_AUTO_STATE = {"last": 0.0}
+
+
+def market_auto():
+    saved = db["settings"].get("market_auto")
+    saved = saved if isinstance(saved, dict) else {}
+    try:
+        minutes = max(1, int(saved.get("minutes", 30)))
+    except (TypeError, ValueError):
+        minutes = 30
+    return {"enabled": saved.get("enabled", True) is not False, "minutes": minutes}
+
+
+def market_auto_view():
+    cfg = market_auto()
+    nxt = int(MARKET_AUTO_STATE["last"] + cfg["minutes"] * 60) if cfg["enabled"] and MARKET_AUTO_STATE["last"] else 0
+    return {**cfg, "last_run": int(MARKET_AUTO_STATE["last"]), "next_run": nxt}
+
+
+def market_auto_tick(now=None):
+
+    now = time.time() if now is None else now
+    with lock:
+        cfg = market_auto()
+        if not cfg["enabled"] or now - MARKET_AUTO_STATE["last"] < cfg["minutes"] * 60:
+            return False
+        MARKET_AUTO_STATE["last"] = now
+        source = db["settings"].get("active_market")
+    if source == "mrkt":
+        start_mrkt_refresh()
+    else:
+        start_portals_refresh()
+    return True
+
+
+def portals_loop():
+    time.sleep(5)
+    try:
+        with lock:
+            MARKET_AUTO_STATE["last"] = time.time()
+        portals_refresh_worker()
+    except Exception as e:
+        print(f"portals loop: {e}", flush=True)
+    while True:
+        time.sleep(15)
+        try:
+            market_auto_tick()
+        except Exception as e:
+            print(f"market auto: {e}", flush=True)
+
+
+@route("/api/admin/market/auto")
+def admin_market_auto(user, body):
+    require_admin(user)
+    if "enabled" in body or "minutes" in body:
+        cur = market_auto()
+        enabled = bool(body.get("enabled", cur["enabled"]))
+        try:
+            minutes = int(body.get("minutes", cur["minutes"]))
+        except (TypeError, ValueError):
+            raise ApiError("bad_request")
+        if minutes < 1 or minutes > 10_000_000:
+            raise ApiError("bad_request")
+        db["settings"]["market_auto"] = {"enabled": enabled, "minutes": minutes}
+    return market_auto_view()
+
+
+@route("/api/admin/market")
+def admin_market(user, body):
+    require_admin(user)
+    return {"rows": market_rows(), **portals_status()}
+
+
+@route("/api/admin/portals/set")
+def admin_portals_set(user, body):
+    require_admin(user)
+    cfg = db["settings"]
+    if body.get("clear_key"):
+        cfg["portals_auth"] = ""
+        mlog("portals", "info", "Ключ Portals удалён")
+    elif str(body.get("auth") or "").strip():
+        cfg["portals_auth"] = str(body["auth"]).strip()[:4000]
+        mlog("portals", "info", f"Ключ Portals сохранён ({mask_key(cfg['portals_auth'])})")
+        start_portals_refresh()
+    return {"rows": market_rows(), **portals_status()}
+
+
+@route("/api/admin/mrkt/set")
+def admin_mrkt_set(user, body):
+    require_admin(user)
+    if body.get("clear_key"):
+        db["settings"]["mrkt_auth"] = ""
+    elif str(body.get("auth") or "").strip():
+        db["settings"]["mrkt_auth"] = str(body["auth"]).strip()[:4000]
+        start_mrkt_refresh()
+    return {"ok": True, "mrkt_key_mask": mask_key(db["settings"].get("mrkt_auth", ""))}
+
+
+
+def mrkt_refresh_worker():
+    if MRKT_STATE["running"] or db["settings"].get("active_market") != "mrkt":
+        return
+    MRKT_STATE.update(running=True, error="", checked=0, models=0, total=0, failed=0)
+    generation = db["settings"].get("market_generation", 0)
+    mlog("mrkt", "info", "Старт загрузки MRKT")
+    try:
+        if not db["settings"].get("mrkt_auth"):
+            raise PortalsError("Токен MRKT не задан")
+
+
+        snapshot = fetch_rasswet_snapshot()
+        names = [{"name": name, "short": item.get("short", "")}
+                 for name, item in snapshot.items()]
+        MRKT_STATE["total"] = len(names)
+        mlog("mrkt", "info", f"Коллекций для проверки: {len(names)}")
+        from concurrent.futures import ThreadPoolExecutor, as_completed
+        rows, errors = [], []
+        def task(c):
+            return c, mrkt_search_models(c, timeout=10)
+        with ThreadPoolExecutor(max_workers=4) as executor:
+            for future in as_completed([executor.submit(task, n) for n in names]):
+                try:
+                    c, found = future.result()
+                    if found:
+                        entries = build_models(found)
+                        floor = min(m["floor"] for m in entries if m["floor"] > 0)
+                        rows.append({"name": c["name"], "short": c["short"],
+                                     "floor": floor, "models": entries,
+                                     "image": next((m.get("image") for m in entries if m.get("image")), "")})
+                        MRKT_STATE["models"] += len(entries)
+                except Exception as exc:
+                    MRKT_STATE["failed"] += 1
+                    if len(errors) < 2:
+                        errors.append(str(exc))
+                    if MRKT_STATE["failed"] <= 5:
+                        mlog("mrkt", "warn", f"Коллекция пропущена: {exc}")
+                finally:
+                    MRKT_STATE["checked"] += 1
+                    if MRKT_STATE["checked"] % 25 == 0:
+                        mlog("mrkt", "info", f"Проверено {MRKT_STATE['checked']}/{MRKT_STATE['total']}, моделей {MRKT_STATE['models']}, ошибок {MRKT_STATE['failed']}")
+        if MRKT_STATE["models"] == 0:
+            raise PortalsError("MRKT: 0 моделей с ценами; " + (errors[0] if errors else "пустой ответ"))
+        if not _publish_source_catalog(rows, "mrkt", generation):
+            raise PortalsError("Не удалось сохранить новый каталог MRKT")
+        MRKT_STATE["updated"] = int(time.time())
+        mlog("mrkt", "ok", f"Готово: коллекций {len(rows)}, моделей {MRKT_STATE['models']}")
+        if errors:
+            MRKT_STATE["error"] = f"Недоступно коллекций: {MRKT_STATE['failed']} · {errors[0]}"
+    except Exception as exc:
+        MRKT_STATE["error"] = str(exc)
+        mlog("mrkt", "error", f"Загрузка остановлена: {exc}")
+    finally:
+        MRKT_STATE["running"] = False
+
+def start_mrkt_refresh():
+    if db["settings"].get("active_market") == "mrkt" and not MRKT_STATE["running"]:
+        MRKT_STATE["running"] = True
+        def run():
+            MRKT_STATE["running"] = False
+            mrkt_refresh_worker()
+        threading.Thread(target=run, daemon=True).start()
+
+
+@route("/api/admin/mrkt/refresh")
+def admin_mrkt_refresh(user, body):
+    require_admin(user)
+    if not db["settings"].get("mrkt_auth"):
+        raise ApiError("mrkt_token_missing")
+    if db["settings"].get("active_market") != "mrkt":
+        raise ApiError("market_not_selected")
+    start_mrkt_refresh()
+    return {"rows": market_rows(), **portals_status()}
+
+
+@route("/api/admin/market/log")
+def admin_market_log(user, body):
+    require_admin(user)
+    if body.get("clear") is True:
+        with _market_log_lock:
+            MARKET_LOG.clear()
+        mlog("system", "info", "Журнал очищен")
+    try:
+        since = int(body.get("since") or 0)
+    except (TypeError, ValueError):
+        since = 0
+    with _market_log_lock:
+        entries = [e for e in MARKET_LOG if e["id"] > since]
+    return {"entries": entries, "last_id": _market_log_id[0],
+            "portals": {"running": PORTALS_STATE["running"], "error": PORTALS_STATE["error"]},
+            "mrkt": {"running": MRKT_STATE["running"], "error": MRKT_STATE["error"],
+                     "checked": MRKT_STATE["checked"], "total": MRKT_STATE["total"]}}
+
+
+@route("/api/admin/market/source")
+def admin_market_source(user, body):
+    require_admin(user)
+    source = str(body.get("source") or "").lower()
+    if source not in ("portals", "mrkt"):
+        raise ApiError("invalid_market")
+    if source == "mrkt" and not db["settings"].get("mrkt_auth"):
+        raise ApiError("mrkt_token_missing")
+    cfg = db["settings"]
+    if cfg.get("active_market") != source or body.get("clear_cache"):
+        cfg["active_market"] = source
+        cfg["market_generation"] = int(cfg.get("market_generation", 0)) + 1
+        CATALOG.clear()
+        db["prices"].clear()
+        save_catalog()
+        IMG_CACHE.clear()
+    if source == "portals":
+        start_portals_refresh()
+    else:
+        start_mrkt_refresh()
+    return {"rows": market_rows(), **portals_status()}
+
+
+@route("/api/admin/market/set")
+def admin_market_set(user, body):
+    require_admin(user)
+    slug = body.get("slug")
+    if slug not in gifts_map():
+        raise ApiError("not_found", 404)
+    try:
+        price = float(body.get("price"))
+    except (TypeError, ValueError):
+        raise ApiError("bad_request")
+    if not 0 < price < 1_000_000:
+        raise ApiError("bad_request")
+    db["prices"][slug] = money(price)
+    apply_tier_values()
+    return {"rows": market_rows(), **portals_status()}
+
+
+@route("/api/admin/market/refresh")
+def admin_market_refresh(user, body):
+    require_admin(user)
+    if db["settings"].get("active_market") != "portals":
+        raise ApiError("market_not_selected")
+    start_portals_refresh()
+    return {"rows": market_rows(), "refreshing": True, **portals_status()}
+
+
+def gift_svg(slug, model=""):
+    digest = hashlib.sha1(f"{slug}:{model}".encode()).digest()
+    hue = digest[0] * 360 // 256
+    hue2 = (hue + 40) % 360
+    initials = "".join(ch for ch in slug if ch.isupper())[:2] or slug[:2].upper()
+    tag = (model[:8] if model else "").replace("&", "").replace("<", "").replace(">", "")
+    label = (
+        f'<text x="64" y="104" font-family="sans-serif" font-size="13" font-weight="700" '
+        f'text-anchor="middle" fill="rgba(255,255,255,.9)">{tag}</text>'
+        if tag else ""
+    )
+    return (
+        '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128">'
+        f'<defs><linearGradient id="g" x1="0" y1="0" x2="1" y2="1">'
+        f'<stop offset="0" stop-color="hsl({hue},70%,62%)"/><stop offset="1" stop-color="hsl({hue2},65%,38%)"/>'
+        "</linearGradient></defs>"
+        '<rect x="14" y="14" width="100" height="100" rx="22" fill="url(#g)"/>'
+        '<rect x="14" y="14" width="100" height="100" rx="22" fill="none" stroke="rgba(255,255,255,.55)" stroke-width="3"/>'
+        '<text x="64" y="72" font-family="sans-serif" font-size="40" font-weight="700" '
+        f'text-anchor="middle" fill="#fff">{initials}</text>{label}</svg>'
+    )
+
+
+IMG_CACHE = {}
+IMG_FAIL_TTL = 600
+
+
+def _download_image(url):
+    req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0", "Accept": "image/png,image/webp,image/*;q=0.8"})
+    with urllib.request.urlopen(req, timeout=8) as resp:
+        data = resp.read(3_000_000)
+        ctype = resp.headers.get("Content-Type", "image/png").split(";")[0].strip()
+    if not data or not (ctype.startswith("image/") or data[:4] == b"\x89PNG" or data[:4] == b"RIFF"):
+        raise ValueError("not an image")
+    if not ctype.startswith("image/"):
+        ctype = "image/png" if data[:4] == b"\x89PNG" else "image/webp"
+    return data, ctype
+
+
+def _first_image(urls):
+    seen = set()
+    for url in urls:
+        if url in seen:
+            continue
+        seen.add(url)
+        try:
+            return _download_image(url)
+        except Exception:
+            continue
+    return None
+
+
+def fetch_gift_image(name, model, slug=""):
+
+    q_name, q_model = quote(name), quote(model)
+    ctx = {"name": q_name, "model": q_model, "name_nospace": quote(name.replace(" ", ""))}
+    urls = []
+    slug_entry = gifts_map().get(slug, {})
+    for m in slug_entry.get("models", []):
+        if m.get("model") == model:
+            img = str(m.get("image", ""))
+            if img.startswith(("https://cdn.tgmrkt.io/gifts/stickers/thumbnails/", "https://fragment.com/file/")):
+                urls.append(img)
+            break
+    for tpl in [GIFT_IMG_TEMPLATE] + GIFT_IMG_FALLBACKS:
+        try:
+            urls.append(tpl.format(**ctx))
+        except (KeyError, IndexError):
+            continue
+    return _first_image(urls)
+
+
+def fetch_collection_image(name, slug):
+    ctx = {"name": quote(name), "slug_lower": slug.lower(), "name_nospace": quote(name.replace(" ", ""))}
+    urls = []
+    pinned = str(gifts_map().get(slug, {}).get("image") or "")
+    if pinned.startswith(("https://fragment.com/file/", "https://cdn.changes.tg/")):
+        urls.append(pinned)
+    for tpl in GIFT_THUMB_TEMPLATES:
+        try:
+            urls.append(tpl.format(**ctx))
+        except (KeyError, IndexError):
+            continue
+    return _first_image(urls)
+
+
+def _cached_image(key, loader):
+    now = time.time()
+    hit = IMG_CACHE.get(key)
+    if hit is not None and (hit[0] is not None or now - hit[1] < IMG_FAIL_TTL):
+        return hit[0]
+    if len(IMG_CACHE) > 2500:
+        IMG_CACHE.clear()
+    try:
+        data = loader()
+    except Exception:
+        data = None
+    IMG_CACHE[key] = (data, now)
+    return data
+
+
+
+
+ORIGINAL_GIFT_IDS = {}
+
+
+def _original_image_url(entry, slug):
+    name = str(entry.get("name") or slug)
+    saved = str(entry.get("original_image") or "")
+    if saved.startswith("https://cdn.changes.tg/gifts/originals/"):
+        return saved
+    listed_id = str(entry.get("gift_id") or "")
+    if listed_id.isdigit() and 16 <= len(listed_id) <= 22:
+        return f"https://cdn.changes.tg/gifts/originals/{listed_id}/Original.png"
+
+
+    short = str(entry.get("short") or "").strip().lower()
+    if re.fullmatch(r"[a-z0-9_-]{2,100}", short):
+        return f"https://fragment.com/file/gifts/{short}/thumb.webp"
+    return "/images/hat.png"
+
+
+@app.get("/gimg/<slug>.webp")
+def gimg(slug):
+
+    entry = gifts_map().get(slug)
+    if not entry:
+        return ("", 404)
+    from flask import redirect
+    model = request.args.get("m", "")[:128]
+    if model:
+        destination = gift_image(slug, model)
+    else:
+        destination = _original_image_url(entry, slug)
+    response = redirect(destination, code=302)
+    response.headers["Cache-Control"] = "public, max-age=86400"
+    return response
+
+TON_SVG = (
+    '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 56 56"><circle cx="28" cy="28" r="28" fill="#0098EA"/>'
+    '<path d="M37.56 15.63H18.44c-3.52 0-5.75 3.79-3.98 6.86l11.8 20.45c.77 1.34 2.7 1.34 3.47 0l11.8-20.45'
+    'c1.77-3.06-.46-6.86-3.97-6.86zM26.25 36.81l-2.57-4.98-6.2-11.09c-.41-.71.1-1.62.95-1.62h7.82v17.69zm12.26-16.07'
+    'l-6.2 11.1-2.57 4.97V19.12h7.82c.86 0 1.36.91.95 1.62z" fill="#fff"/></svg>'
+)
+HAT_SVG = (
+    '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" shape-rendering="crispEdges">'
+    '<rect x="6" y="44" width="52" height="8" fill="#2a1450"/><rect x="8" y="42" width="48" height="6" fill="#5b2bb0"/>'
+    '<rect x="20" y="20" width="24" height="24" fill="#4a1fa0"/><rect x="26" y="10" width="14" height="12" fill="#4a1fa0"/>'
+    '<rect x="32" y="4" width="8" height="8" fill="#5b2bb0"/><rect x="20" y="36" width="24" height="6" fill="#ffc043"/>'
+    '<rect x="29" y="36" width="6" height="6" fill="#fff0b0"/></svg>'
+)
+CAT_SVG = (
+    '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" shape-rendering="crispEdges">'
+    '<rect x="14" y="14" width="8" height="12" fill="#2b2b3a"/><rect x="42" y="14" width="8" height="12" fill="#2b2b3a"/>'
+    '<rect x="14" y="22" width="36" height="28" fill="#3a3a4e"/><rect x="22" y="30" width="6" height="6" fill="#ffe08a"/>'
+    '<rect x="36" y="30" width="6" height="6" fill="#ffe08a"/><rect x="30" y="40" width="4" height="4" fill="#ff8aa8"/></svg>'
+)
+AXE_SVG = (
+    '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" shape-rendering="crispEdges">'
+    '<rect x="30" y="14" width="6" height="44" fill="#7a4a26"/><rect x="30" y="14" width="2" height="44" fill="#a8713c"/>'
+    '<rect x="14" y="10" width="18" height="22" fill="#9aa3b5"/><rect x="10" y="14" width="6" height="14" fill="#cfd6e4"/>'
+    '<rect x="14" y="10" width="18" height="3" fill="#e8edf7"/></svg>'
+)
+STAFF_SVG = (
+    '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" shape-rendering="crispEdges">'
+    '<rect x="30" y="22" width="5" height="40" fill="#7a4a26"/><rect x="30" y="22" width="2" height="40" fill="#a8713c"/>'
+    '<rect x="22" y="6" width="20" height="18" fill="#8b4cf0"/><rect x="26" y="10" width="8" height="8" fill="#e0c8ff"/>'
+    '<rect x="20" y="10" width="2" height="10" fill="#b98bff"/><rect x="42" y="10" width="2" height="10" fill="#b98bff"/></svg>'
+)
+PLANK_SVG = (
+    '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 32" preserveAspectRatio="none" shape-rendering="crispEdges">'
+    '<rect width="64" height="32" fill="#8a5429"/><rect width="64" height="4" fill="#b9814a"/>'
+    '<rect y="28" width="64" height="4" fill="#4a2a10"/><rect x="0" y="14" width="64" height="2" fill="#7a4a26"/></svg>'
+)
+SKY_SVG = (
+    '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 10 10" preserveAspectRatio="none">'
+    '<defs><linearGradient id="s" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#2f8fe8"/>'
+    '<stop offset="1" stop-color="#d3effd"/></linearGradient></defs><rect width="10" height="10" fill="url(#s)"/></svg>'
+)
+with open(os.path.join(BASE_DIR, "static", "hatcoin.svg"), encoding="utf-8") as _coin_svg:
+    HATCOIN_SVG = _coin_svg.read()
+
+FALLBACK_ART = {
+    "ton": TON_SVG, "gram": TON_SVG, "hatcoin": HATCOIN_SVG, "hat": HAT_SVG, "cat": CAT_SVG,
+    "axe-icon": AXE_SVG, "staff-icon": STAFF_SVG,
+    "plank-left": PLANK_SVG, "plank-mid": PLANK_SVG, "plank-right": PLANK_SVG,
+    "sky": SKY_SVG, "sky-onyx": SKY_SVG, "sky-black": SKY_SVG,
+}
+
+
+
+
+def _tonconnect_site_origin():
+    env = _env_first("PUBLIC_APP_URL", "APP_URL", "SITE_URL", "RENDER_EXTERNAL_URL")
+    if env:
+        return env.rstrip("/")
+    settings = db.setdefault("settings", {})
+    if has_request_context():
+        origin = request.host_url.rstrip("/")
+        if origin.startswith("https://") and settings.get("last_origin") != origin:
+            settings["last_origin"] = origin
+        return origin
+    return str(settings.get("last_origin") or "")
+
+
+def tonconnect_config():
+    origin = _tonconnect_site_origin()
+    defaults = {
+        "recipient_address": _env_first("DEPOSIT_ADDRESS"),
+        "app_url": origin,
+        "app_name": _env_first("TONCONNECT_APP_NAME") or "Magic Upgrade",
+        "icon_url": _env_first("TONCONNECT_ICON_URL") or origin + "/images/hat.png",
+        "terms_url": _env_first("TONCONNECT_TERMS_URL"),
+        "privacy_url": _env_first("TONCONNECT_PRIVACY_URL"),
+    }
+    saved = db.get("settings", {}).get("tonconnect", {})
+    if isinstance(saved, dict):
+        for key in defaults:
+            value = saved.get(key)
+            if isinstance(value, str) and value.strip():
+                defaults[key] = value.strip()
+    return defaults
+
+
+def _valid_ton_address(address):
+    address = str(address or "").strip()
+    if not address:
+        return True
+
+    return bool(re.fullmatch(r"(?:[A-Za-z0-9_-]{48}|-?1:[0-9a-fA-F]{64}|0:[0-9a-fA-F]{64})", address))
+
+
+def _valid_tonconnect_url(value, optional=False, icon=False):
+    value = str(value or "").strip()
+    if not value:
+        return optional
+    if len(value) > 512 or any(c.isspace() for c in value):
+        return False
+    try:
+        parts = urlsplit(value)
+        if parts.scheme != "https" or not parts.hostname or parts.username or parts.password:
+            return False
+        if icon and not parts.path.lower().endswith((".png", ".ico")):
+            return False
+        return True
+    except ValueError:
+        return False
+
+
+@route("/api/admin/tonconnect")
+def admin_tonconnect(user, body):
+    require_admin(user)
+    cfg = tonconnect_config()
+    return {
+        "config": cfg,
+        "using_saved": isinstance(db["settings"].get("tonconnect"), dict),
+        "manifest_url": request.host_url.rstrip("/") + "/tonconnect-manifest.json",
+        "deposit_ready": bool(cfg["recipient_address"]),
+    }
+
+
+@route("/api/admin/tonconnect/save")
+def admin_tonconnect_save(user, body):
+    require_admin(user)
+    if body.get("reset"):
+        db["settings"].pop("tonconnect", None)
+    else:
+        current = tonconnect_config()
+        fields = ("recipient_address", "app_url", "app_name", "icon_url",
+                  "terms_url", "privacy_url")
+        values = {k: str(body.get(k, current[k]) or "").strip() for k in fields}
+        if not _valid_ton_address(values["recipient_address"]):
+            raise ApiError("invalid_ton_address")
+        if not (1 <= len(values["app_name"]) <= 64):
+            raise ApiError("invalid_app_name")
+        if not _valid_tonconnect_url(values["app_url"]):
+            raise ApiError("invalid_app_url")
+        if not _valid_tonconnect_url(values["icon_url"], icon=True):
+            raise ApiError("invalid_icon_url")
+        if not _valid_tonconnect_url(values["terms_url"], optional=True):
+            raise ApiError("invalid_terms_url")
+        if not _valid_tonconnect_url(values["privacy_url"], optional=True):
+            raise ApiError("invalid_privacy_url")
+        db["settings"]["tonconnect"] = values
+    cfg = tonconnect_config()
+    return {
+        "ok": True, "config": cfg,
+        "using_saved": isinstance(db["settings"].get("tonconnect"), dict),
+        "manifest_url": request.host_url.rstrip("/") + "/tonconnect-manifest.json",
+        "deposit_ready": bool(cfg["recipient_address"]),
+    }
+
+
+@app.get("/tonconnect-manifest.json")
+def tonconnect_manifest():
+    cfg = tonconnect_config()
+    result = {"url": cfg["app_url"], "name": cfg["app_name"], "iconUrl": cfg["icon_url"]}
+    if cfg["terms_url"]:
+        result["termsOfUseUrl"] = cfg["terms_url"]
+    if cfg["privacy_url"]:
+        result["privacyPolicyUrl"] = cfg["privacy_url"]
+    response = jsonify(result)
+    response.headers["Access-Control-Allow-Origin"] = "*"
+    response.headers["Cache-Control"] = "public, max-age=60, must-revalidate"
+    return response
+
+
+@app.get("/img/<path:name>")
+def quest_image_asset(name):
+
+    if name not in ("costyan_que.png", "kostyan-halloween.png", "kostyan-meadow.png", "kostyan-avatar.png"):
+        return ("", 404)
+    for folder in (os.path.join(BASE_DIR, "img"), os.path.join(BASE_DIR, "images"),
+                   os.path.join(BASE_DIR, "static", "img")):
+        if os.path.isfile(os.path.join(folder, name)):
+            return send_from_directory(folder, name, conditional=True)
+
+    return send_from_directory(os.path.join(BASE_DIR, "static", "quests"), "kostyan-banner.svg", conditional=True)
+
+
+@app.get("/static/img/hand.png")
+def skeleton_pointer_png():
+    folder = os.path.join(BASE_DIR, "static", "img")
+    if os.path.isfile(os.path.join(folder, "hand.png")):
+        return send_from_directory(folder, "hand.png", conditional=True)
+
+    return send_from_directory(os.path.join(BASE_DIR, "static"),
+                               "skeleton-pointer.svg", conditional=True)
+
+
+@app.get("/images/<path:name>")
+def images(name):
+    folder = os.path.join(BASE_DIR, "images")
+    if os.path.isfile(os.path.join(folder, name)):
+        return send_from_directory(folder, name)
+    art = FALLBACK_ART.get(os.path.splitext(os.path.basename(name))[0])
+    if art:
+        resp = app.response_class(art, mimetype="image/svg+xml")
+        resp.headers["Cache-Control"] = "no-cache"
+        return resp
+    return ("", 404)
+
+
+
+_COMPRESSIBLE = {"application/json", "text/html", "text/css", "application/javascript", "text/javascript",
+                 "image/svg+xml", "text/plain"}
+
+
+@app.after_request
+def compress_response(resp):
+    if request.path.startswith(("/admin", "/api/admin/")):
+        resp.headers["Cache-Control"] = "private, no-store"
+    try:
+        if (resp.direct_passthrough or resp.status_code != 200 or "Content-Encoding" in resp.headers
+                or resp.mimetype not in _COMPRESSIBLE
+                or "gzip" not in request.headers.get("Accept-Encoding", "").lower()):
+            return resp
+        data = resp.get_data()
+        if len(data) < 1024:
+            return resp
+        resp.set_data(gzip.compress(data, 5))
+        resp.headers["Content-Encoding"] = "gzip"
+        resp.headers["Vary"] = "Accept-Encoding"
+        resp.headers["Content-Length"] = str(len(resp.get_data()))
+    except Exception:
+        pass
+    return resp
+
+
+_INDEX_CACHE = {"mtime": None, "raw": b"", "gz": b"", "etag": ""}
+
+
+def _index_bytes():
+    path = os.path.join(BASE_DIR, "index.html")
+    mtime = os.path.getmtime(path)
+    if _INDEX_CACHE["mtime"] != mtime:
+        with open(path, "rb") as f:
+            raw = f.read()
+        _INDEX_CACHE.update(mtime=mtime, raw=raw, gz=gzip.compress(raw, 9),
+                            etag='"' + hashlib.sha1(raw).hexdigest()[:20] + '"')
+    return _INDEX_CACHE
+
+
+@app.get("/")
+def index():
+    cache = _index_bytes()
+    headers = {"ETag": cache["etag"], "Cache-Control": "no-cache", "Vary": "Accept-Encoding",
+               "Content-Type": "text/html; charset=utf-8"}
+    if request.headers.get("If-None-Match") == cache["etag"]:
+        return Response(status=304, headers=headers)
+    if "gzip" in request.headers.get("Accept-Encoding", "").lower():
+        headers["Content-Encoding"] = "gzip"
+        return Response(cache["gz"], headers=headers)
+    return Response(cache["raw"], headers=headers)
+
+
+
+STATIC_DIR = os.path.join(BASE_DIR, "static")
+STATIC_ALLOWED = {".mp4", ".m4v", ".webm", ".webp", ".jpg", ".jpeg", ".png", ".avif", ".gif", ".svg",
+                  ".js", ".css", ".json", ".woff", ".woff2", ".ttf", ".ico", ".ogg", ".mp3"}
+VIDEO_EXT = {".mp4", ".m4v", ".webm"}
+POSTER_EXT = {".webp", ".jpg", ".jpeg", ".png", ".avif"}
+BG_SKIP_DIRS = {"next", "css", "js", "img"}
+
+
+def png_as_webp(name):
+
+    src = os.path.join(STATIC_DIR, name[:-5] + ".png")
+    if not os.path.isfile(src) or not os.path.realpath(src).startswith(os.path.realpath(STATIC_DIR)):
+        return None
+    mtime = os.path.getmtime(src)
+    key = hashlib.sha1(f"{name}:{mtime}".encode()).hexdigest()[:16]
+    cache_dir = os.path.join(tempfile.gettempdir(), "hatdrop-webp")
+    os.makedirs(cache_dir, exist_ok=True)
+    out = os.path.join(cache_dir, key + ".webp")
+    if not os.path.isfile(out):
+        try:
+            from PIL import Image
+            with Image.open(src) as im:
+                im = im.convert("RGBA" if "A" in im.getbands() else "RGB")
+                if name.startswith("themes/"):
+                    im.thumbnail((640, 640), Image.LANCZOS)
+                im.save(out, "WEBP", quality=82, method=4)
+        except Exception as exc:
+            print(f"webp convert failed: {exc}", flush=True)
+            return None
+    resp = send_from_directory(cache_dir, key + ".webp", conditional=True)
+    resp.headers["Cache-Control"] = "public, max-age=86400"
+    return resp
+
+
+@app.get("/static/<path:name>")
+def static_files(name):
+    if os.path.splitext(name)[1].lower() not in STATIC_ALLOWED:
+        return ("", 404)
+    if name.lower().endswith(".webp") and not os.path.isfile(os.path.join(STATIC_DIR, name)):
+        converted = png_as_webp(name)
+        if converted:
+            return converted
+    resp = send_from_directory(STATIC_DIR, name, conditional=True)
+
+    resp.headers["Cache-Control"] = ("public, max-age=31536000, immutable" if request.args.get("v")
+                                     else "public, max-age=3600")
+    return resp
+
+
+
+_NIGHT_RE = re.compile(r"night|ноч|dark|moon|луна|midnight|evening|вечер|dusk|закат|sunset", re.I)
+_DAY_RE = re.compile(r"day|morning|morn|утр|дн|день|dawn|sunrise|рассвет|sun|light|солн|bright", re.I)
+_MOBILE_RE = re.compile(r"mobile|mob|phone|vertical|portrait|vert|9x16|9-16|9_16|small|[-_ .]sm(?![a-z])", re.I)
+_DESKTOP_RE = re.compile(r"desktop|pc|wide|landscape|16x9|16-9|16_9", re.I)
+_BG_CACHE = {"at": 0, "data": None}
+
+
+def _bg_theme(stem):
+    if _NIGHT_RE.search(stem):
+        return "night"
+    if _DAY_RE.search(stem):
+        return "day"
+    return None
+
+
+def scan_backgrounds():
+    clips = {"day": [], "night": []}
+    images = {"day": [], "night": []}
+    posters = {}
+    found = []
+    for root, dirs, files in os.walk(STATIC_DIR):
+        dirs[:] = [d for d in dirs if d not in BG_SKIP_DIRS or root != STATIC_DIR]
+        for fn in files:
+            ext = os.path.splitext(fn)[1].lower()
+            if ext in VIDEO_EXT or ext in POSTER_EXT:
+                full = os.path.join(root, fn)
+                rel = os.path.relpath(full, STATIC_DIR).replace(os.sep, "/")
+                found.append((rel, fn, ext, full))
+    for rel, fn, ext, full in sorted(found):
+        stem = os.path.splitext(fn)[0]
+        if ext in POSTER_EXT:
+            posters.setdefault(os.path.splitext(rel)[0].lower(), rel)
+            img_theme = _bg_theme(stem) or _bg_theme(os.path.dirname(rel))
+            if img_theme:
+                try:
+                    st = os.stat(full)
+                except OSError:
+                    continue
+                images[img_theme].append({
+                    "url": "/static/" + quote(rel) + "?v=" + str(int(st.st_mtime)), "size": st.st_size,
+                    "exact": stem.lower() in ("day", "night", "morning", "утро", "ночь"),
+                    "mobile": bool(_MOBILE_RE.search(stem)), "desktop": bool(_DESKTOP_RE.search(stem)),
+                })
+            continue
+        theme = _bg_theme(stem) or _bg_theme(os.path.dirname(rel))
+        if not theme:
+            continue
+        try:
+            st = os.stat(full)
+        except OSError:
+            continue
+        url = "/static/" + quote(rel) + "?v=" + str(int(st.st_mtime))
+        clips[theme].append({
+            "url": url, "type": "video/webm" if ext == ".webm" else "video/mp4", "size": st.st_size,
+            "mobile": bool(_MOBILE_RE.search(stem)), "desktop": bool(_DESKTOP_RE.search(stem)),
+            "key": _MOBILE_RE.sub("", _DESKTOP_RE.sub("", os.path.splitext(rel)[0])).lower().strip("-_ ."),
+            "_poster": os.path.splitext(rel)[0].lower(),
+        })
+    for theme in clips:
+        for c in clips[theme]:
+            pr = posters.get(c.pop("_poster"))
+            if pr:
+                c["poster"] = "/static/" + quote(pr)
+    clips["images"] = images
+    return clips
+
+
+@app.get("/api/bg")
+def bg_manifest():
+    now = time.time()
+    if _BG_CACHE["data"] is None or now - _BG_CACHE["at"] > 20:
+        _BG_CACHE.update(at=now, data=scan_backgrounds())
+    resp = jsonify(_BG_CACHE["data"])
+    resp.headers["Cache-Control"] = "public, max-age=20"
+    return resp
+
+
+def models_prewarm_loop():
+
+    time.sleep(8)
+    while True:
+        try:
+            with lock:
+                order = sorted(CATALOG.items(), key=lambda kv: -(kv[1].get("pop") or 0))
+                todo = [slug for slug, e in order if not e.get("models")][:24]
+            for slug in todo:
+                if time.time() - MODEL_FAIL.get(slug, 0) < 60:
+                    continue
+                ensure_models(slug)
+                time.sleep(0.6)
+        except Exception as e:
+            print(f"models prewarm: {e}", flush=True)
+        time.sleep(120)
+
+
+@app.get("/healthz")
+def healthz():
+
+    return Response("ok", mimetype="text/plain", headers={"Cache-Control": "no-store"})
+
+
+KEEPALIVE_URL = (os.environ.get("KEEPALIVE_URL") or os.environ.get("RENDER_EXTERNAL_URL") or "").rstrip("/")
+KEEPALIVE_SEC = max(60, int(os.environ.get("KEEPALIVE_SEC", "540") or 540))
+
+
+def keepalive_loop():
+
+
+
+    time.sleep(30)
+    while True:
+        try:
+            req = urllib.request.Request(KEEPALIVE_URL + "/healthz", headers={"User-Agent": "keepalive"})
+            with urllib.request.urlopen(req, timeout=20) as r:
+                r.read(8)
+        except Exception as e:
+            print(f"keepalive: {e}", flush=True)
+        time.sleep(KEEPALIVE_SEC)
+
+
+
+
+
+
+STARS_LOCK_DAYS = 21
+STARS_ORDER_TTL = 3600
+
+
+def stars_settings():
+    saved = db["settings"].get("stars")
+    saved = saved if isinstance(saved, dict) else {}
+    try:
+        per_ton = int(saved.get("per_ton", 100))
+    except (TypeError, ValueError):
+        per_ton = 100
+    return {"enabled": saved.get("enabled", True) is not False, "per_ton": min(100000, max(1, per_ton))}
+
+
+def stars_config():
+    cfg = stars_settings()
+    return {"enabled": bool(cfg["enabled"] and BOT_TOKEN), "per_ton": cfg["per_ton"], "lock_days": STARS_LOCK_DAYS,
+            "min_ton": MIN_DEPOSIT}
+
+
+def stars_pre_checkout(query):
+    ok, reason = False, "Счёт больше недействителен. Создайте новое пополнение."
+    payload = str(query.get("invoice_payload") or "")
+    uid = (query.get("from") or {}).get("id")
+    if isinstance(uid, int) and payload.startswith("stars:") and query.get("currency") == "XTR":
+        with lock:
+            order = db.get("stars_orders", {}).get(payload[6:])
+            try:
+                total = int(query.get("total_amount"))
+            except (TypeError, ValueError):
+                total = -1
+            ok = bool(order and order["uid"] == f"tg{uid}" and order["status"] == "pending"
+                      and order["stars"] == total and time.time() - order["created"] < STARS_ORDER_TTL)
+    answer = {"pre_checkout_query_id": str(query.get("id") or ""), "ok": ok}
+    if not ok:
+        answer["error_message"] = reason
+    try:
+        tg_api("answerPreCheckoutQuery", **answer)
+    except Exception as exc:
+        print(f"answerPreCheckoutQuery failed: {exc}", flush=True)
+
+
+def stars_successful_payment(telegram_id, payment):
+
+    payload = str(payment.get("invoice_payload") or "")
+    charge = str(payment.get("telegram_payment_charge_id") or "").strip()[:180]
+    try:
+        total = int(payment.get("total_amount"))
+    except (TypeError, ValueError):
+        return False
+    if not payload.startswith("stars:") or payment.get("currency") != "XTR" or not charge:
+        return False
+    with lock:
+        orders = db.setdefault("stars_orders", {})
+        order = orders.get(payload[6:])
+        user = db["users"].get(f"tg{telegram_id}")
+        if not order or not user or order["uid"] != user["id"] or order["stars"] != total:
+            return False
+        if order["status"] == "credited":
+            return False
+        if any(o.get("charge_id") == charge for o in orders.values()):
+            return False
+        amount = order["amount"]
+        user["balance"] = ton(user["balance"] + amount)
+        until = int(time.time()) + STARS_LOCK_DAYS * 86400
+        user["stars_lock_until"] = max(int(user.get("stars_lock_until", 0) or 0), until)
+        order.update(status="credited", charge_id=charge, credited=int(time.time()))
+        try:
+            _quest_record_deposit(db, user, amount=amount, payment_id="stars:" + charge)
+        except ValueError:
+            pass
+        credit_referral_bonus(user, amount)
+        order['bonus_ton'] = credit_deposit_campaign(user, amount, 'stars:'+charge, order.get('deposit_promo_id'))
+        queue_deposit_notice(user,'stars',amount,'stars:'+charge,order['bonus_ton'],template='deposit_stars_received',extra={'date':time.strftime('%d.%m.%Y',time.gmtime(user['stars_lock_until']))})
+        save_db()
+        uid = user["id"]
+        lock_until = user["stars_lock_until"]
+    try:
+        flush_db()
+    except Exception as exc:
+        print(f"stars persistence failed: {exc}", flush=True)
+    day = time.strftime("%d.%m.%Y", time.gmtime(lock_until))
+    return True
+
+
+@app.post("/api/stars/deposit/create")
+def stars_deposit_create():
+    with lock:
+        user, body = current_user()
+        cfg = stars_settings()
+        if not (cfg["enabled"] and BOT_TOKEN):
+            raise ApiError("stars_disabled", 503)
+        if not str(user["id"]).startswith("tg"):
+            raise ApiError("telegram_required")
+        try:
+            amount = money(float(body.get("amount")))
+        except (TypeError, ValueError, OverflowError):
+            raise ApiError("bad_request")
+        if not (MIN_DEPOSIT <= amount <= 10000):
+            raise ApiError("bad_amount", min_ton=MIN_DEPOSIT, max_ton=10000)
+        stars = max(1, int(-(-amount * cfg["per_ton"] // 1)))
+        order_id = secrets.token_hex(10)
+        orders = db.setdefault("stars_orders", {})
+        for old in list(orders):
+            o = orders[old]
+            if o["uid"] == user["id"] and o["status"] == "pending":
+                o["status"] = "expired"
+        orders[order_id] = {"id": order_id, "uid": user["id"], "amount": amount, "stars": stars,
+                            "status": "pending", "created": int(time.time()), "deposit_promo_id": deposit_campaign_id(user)}
+        if len(orders) > 2000:
+            for old in sorted(orders, key=lambda k: orders[k]["created"])[:len(orders) - 2000]:
+                orders.pop(old)
+        save_db()
+    try:
+        url = tg_api("createInvoiceLink", title="Пополнение HatDrop",
+                     description=f"Пополнение игрового баланса на {amount:g} GRAM",
+                     payload=f"stars:{order_id}", currency="XTR",
+                     prices=[{"label": f"{amount:g} GRAM", "amount": stars}])
+    except Exception as exc:
+        print(f"createInvoiceLink failed: {exc}", flush=True)
+        with lock:
+            db["stars_orders"][order_id]["status"] = "failed"
+        raise ApiError("invoice_failed", 502)
+    return jsonify({"ok": True, "order_id": order_id, "invoice_url": url, "stars": stars, "amount": amount,
+                    "lock_days": STARS_LOCK_DAYS})
+
+
+@route("/api/stars/deposit/status")
+def stars_deposit_status(user, body):
+    order = db.get("stars_orders", {}).get(str(body.get("order_id") or ""))
+    if not order or order["uid"] != user["id"]:
+        raise ApiError("not_found", 404)
+    return {"status": order["status"], "balance_ton": ton(user["balance"]),
+            "withdraw_locked_until": int(user.get("stars_lock_until", 0) or 0)}
+
+
+@route("/api/admin/stars/save")
+def admin_stars_save(user, body):
+    require_admin(user)
+    saved = dict(db["settings"].get("stars") or {})
+    if "enabled" in body:
+        saved["enabled"] = bool(body["enabled"])
+    if "per_ton" in body:
+        try:
+            value = int(body["per_ton"])
+        except (TypeError, ValueError):
+            raise ApiError("bad_request")
+        if not 1 <= value <= 100000:
+            raise ApiError("bad_request")
+        saved["per_ton"] = value
+    db["settings"]["stars"] = saved
+    return {"stars": stars_settings(), "bot_ready": bool(BOT_TOKEN)}
+
+
+@route("/api/admin/user/stars-unlock")
+def admin_user_stars_unlock(user, body):
+    require_admin(user)
+    target = find_user(body.get("key"))
+    target.pop("stars_lock_until", None)
+    return {"user": admin_user_detail(target)}
+
+
+@route("/api/admin/stars")
+def admin_stars(user, body):
+    require_admin(user)
+    return {"stars": stars_settings(), "bot_ready": bool(BOT_TOKEN)}
+
+
+
+
+
+
+import relayer as relayer_lib
+
+GIFT_ACCEPT_RATE = 1.0
+RELAYER_SCAN_SECONDS = max(5, min(10,int(os.environ.get("RELAYER_SCAN_SECONDS", "5") or 5)))
+RELAYER_EVENTS_LIMIT = 500
+NFT_IMG_CACHE = {}
+NFT_IMG_CACHE_MAX = 200
+
+
+def relayer_doc():
+    doc = db.setdefault("relayer", {})
+    doc.setdefault("enabled", True)
+    for key in ("state", "auth", "events"):
+        if not isinstance(doc.get(key), dict):
+            doc[key] = {}
+    return doc
+
+
+def relayer_creds():
+    doc = relayer_doc()
+    api_id = str(os.environ.get("TELEGRAM_API_ID") or doc.get("api_id") or "").strip()
+    api_hash = str(os.environ.get("TELEGRAM_API_HASH") or doc.get("api_hash") or "").strip()
+    return api_id, api_hash
+
+
+def relayer_ready():
+    doc = relayer_doc()
+    api_id, api_hash = relayer_creds()
+    return bool(doc.get("enabled") and api_id and api_hash and doc["state"].get("authorized"))
+
+
+def relayer_account():
+    return str((relayer_doc()["state"].get("account") or {}).get("username") or "")
+
+
+def gift_deposit_config():
+    ready = relayer_ready() and bool(relayer_account())
+    return {"enabled": ready, "account": relayer_account() if ready else "", "share": 1.0, "hat_share": 1.1, "price_basis": "model_or_hat_black_backdrop", "hold_days": 0}
+
+
+def _norm(value):
+    return re.sub(r"[^a-z0-9]+", "", str(value or "").casefold())
+
+
+def nft_collection(title, slug):
+    wanted = {_norm(title), _norm(re.sub(r"-\d+$", "", str(slug or "")))} - {""}
+    for key, entry in gifts_map().items():
+        if wanted & {_norm(entry.get("name")), _norm(key)}:
+            return key
+    return ""
+
+
+def is_hat_collection(collection):
+    entry = CATALOG.get(collection, {})
+    return bool({_norm(collection), _norm(entry.get('name'))}&{'witchhat','witchhead','bechat','beachhead'})
+
+def gift_accept_rate(collection):
+    return 1.1 if is_hat_collection(collection) else 1.0
+
+
+def nft_portal_price(title, slug, model="", backdrop=""):
+
+    collection = nft_collection(title, slug)
+    entry = CATALOG.get(collection, {})
+    if not collection or not entry or db.get('settings', {}).get('active_market', 'portals') != 'portals' or entry.get('source', 'portals') != 'portals':
+        return 0.0, collection
+    clean = lambda value: _norm(re.sub(r"\s*\([^)]*\)\s*$", "", str(value or "")))
+    special = clean(backdrop)
+    if is_hat_collection(collection) and special in ('black', 'onyxblack'):
+        prices = [float(v) for k, v in entry.get('backdrops', {}).items() if clean(k) == special and positive_ton(v)]
+    else:
+        prices = [float(m['floor']) for m in entry.get('models', []) if clean(m.get('model')) == clean(model) and clean(model)
+                  and m.get('source', 'portals') in ('', 'portals') and positive_ton(m.get('floor'))]
+    return (ton(min(prices)) if prices else 0.0), collection
+
+
+
+EMOJI_ID_RE = re.compile(r"^[0-9]{5,30}$")
+EMOJI_NOTICE = ("Custom (premium) emoji в сообщениях бота работают, если у владельца бота есть Telegram Premium. "
+                "Если эмодзи не задано — используется обычный.")
+
+
+def emoji_doc():
+    doc = db.setdefault("emoji", {})
+    doc.setdefault("saved", {})
+    doc.setdefault("gifts", {})
+    doc.setdefault("ton", {})
+    return doc
+
+
+def emoji_tag(entry, default):
+    eid = str((entry or {}).get("id") or "")
+    fallback = str((entry or {}).get("emoji") or "")
+    if EMOJI_ID_RE.match(eid) and fallback:
+        return f'<tg-emoji emoji-id="{eid}">{html.escape(fallback)}</tg-emoji>'
+    return default
+
+
+def ton_emoji_html():
+    return emoji_tag(emoji_doc().get("ton"), "💎")
+
+
+def gift_emoji_html(collection):
+    return emoji_tag(emoji_doc()["gifts"].get(str(collection or "")), "🎁")
+
+
+def fetch_custom_emoji_map(ids):
+
+    unique = []
+    for v in ids or []:
+        v = str(v or "").strip()
+        if EMOJI_ID_RE.match(v) and v not in unique:
+            unique.append(v)
+    out = {}
+    for i in range(0, len(unique), 200):
+        for st in tg_api("getCustomEmojiStickers", custom_emoji_ids=unique[i:i + 200]) or []:
+            eid = str(st.get("custom_emoji_id") or "")
+            if eid:
+                out[eid] = {"id": eid, "emoji": str(st.get("emoji") or "")[:32], "set_name": str(st.get("set_name") or "")}
+    return out
+
+
+def nft_delivered_message(info, collection, name, value):
+    link = f"https://t.me/nft/{re.sub(r'[^A-Za-z0-9_-]+', '', info['slug'])}"
+    payload=message_payload(bot_editor_config()['messages'],'gift_deposit_received',_bot_app_url(),gift=name,gift_emoji=gift_emoji_html(collection),extra={'gift_link':f'<a href="{link}">{html.escape(name)}</a>','ton_emoji':ton_emoji_html(),'value':f'{value:g}'})
+    return payload['text'],payload.get('reply_markup')
+
+
+def relayer_catalog():
+    items = []
+    for key, entry in CATALOG.items():
+        prices = [float(m['floor']) for m in entry.get('models', []) if positive_ton(m.get('floor')) and m.get('source', 'portals') in ('', 'portals')]
+        if db.get('settings', {}).get('active_market', 'portals') != 'portals' or entry.get('source', 'portals') != 'portals':
+            continue
+        prices = [p for p in prices if p > 0]
+        if prices:
+            items.append({"title": entry.get("name", key), "model": "", "backdrop": "", "image": gift_image(key),
+                          "credit_ton": ton(min(prices) * gift_accept_rate(key)), "price_from": True,
+                          "accept_percent": round(gift_accept_rate(key) * 100), "auto": True,
+                          "reason": "Точная сумма зависит от модели; Black и Onyx Black шляпы — от цены фона."})
+    items.sort(key=lambda x: (x["credit_ton"], x["title"].casefold()))
+    return items
+
+
+def _msk_day(ts=None):
+    return time.strftime("%Y-%m-%d", time.gmtime((ts or time.time()) + 3 * 3600))
+
+
+def relayer_stats_add(sender_id, value):
+
+    stats = relayer_doc().setdefault("stats", {"count": 0, "ton": 0.0, "days": {}, "senders": {}})
+    stats["count"] = int(stats.get("count", 0)) + 1
+    stats["ton"] = ton(float(stats.get("ton", 0)) + value)
+    day = stats.setdefault("days", {}).setdefault(_msk_day(), {"count": 0, "ton": 0.0})
+    day["count"] += 1
+    day["ton"] = ton(day["ton"] + value)
+    for old in sorted(stats["days"])[:-90]:
+        stats["days"].pop(old, None)
+    sender = stats.setdefault("senders", {}).setdefault(str(sender_id), {"count": 0, "ton": 0.0})
+    sender["count"] += 1
+    sender["ton"] = ton(sender["ton"] + value)
+
+
+def relayer_stats_view():
+    doc = relayer_doc()
+    stats = doc.get("stats")
+    if not stats:
+        for ev in doc["events"].values():
+            if ev.get("status") in ("credited", "delivered") and ev.get("price_ton"):
+                relayer_stats_add(ev.get("sender_id", 0), float(ev["price_ton"]))
+        stats = doc.get("stats") or {"count": 0, "ton": 0.0, "days": {}, "senders": {}}
+    days = stats.get("days", {})
+    today = _msk_day()
+    def window(n):
+        keys = [_msk_day(time.time() - i * 86400) for i in range(n)]
+        return {"count": sum(days.get(k, {}).get("count", 0) for k in keys), "ton": ton(sum(days.get(k, {}).get("ton", 0) for k in keys))}
+    top = sorted(stats.get("senders", {}).items(), key=lambda kv: kv[1]["ton"], reverse=True)[:5]
+    names = []
+    for sid, v in top:
+        u = db["users"].get(f"tg{sid}") or {}
+        names.append({"id": sid, "name": u.get("username") and "@" + u["username"] or u.get("first_name") or "", "count": v["count"], "ton": v["ton"]})
+    gifts_value = 0.0
+    for g in doc.get("gifts", []):
+        price, _ = nft_portal_price(g.get("title"), g.get("slug"), g.get("model", ""), g.get("backdrop", ""))
+        gifts_value += price
+    return {"today": window(1), "week": window(7), "month": window(30),
+            "total": {"count": int(stats.get("count", 0)), "ton": ton(stats.get("ton", 0))},
+            "senders": len(stats.get("senders", {})), "top": names, "gifts_value_ton": ton(gifts_value), "today_key": today}
+
+
+def relayer_credit(info, baseline=False):
+
+    doc = relayer_doc()
+    events = doc["events"]
+    if info["key"] in events:
+        return "duplicate"
+    event = {"key": info["key"], "sender_id": info["sender_id"], "title": info["title"], "number": info["number"],
+             "slug": info["slug"], "model": info["model"], "backdrop": info.get("backdrop", ""), "at": int(time.time())}
+
+    def finish(status, **extra):
+        event.update(status=status, **extra)
+        events[info["key"]] = event
+        for old in sorted(events, key=lambda k: events[k].get("at", 0))[:max(0, len(events) - RELAYER_EVENTS_LIMIT)]:
+            events.pop(old, None)
+        return status
+
+    if baseline:
+        return finish("baseline")
+    if not info["slug"]:
+        return finish("skipped")
+    user = db["users"].get(f"tg{info['sender_id']}") if info["sender_id"] else None
+    if not user:
+        return finish("unknown_user")
+    portal, collection = nft_portal_price(info["title"], info["slug"], info.get("model", ""), info.get("backdrop", ""))
+    if portal <= 0:
+        return "pending_price"
+    value = ton(portal * gift_accept_rate(collection))
+    if value <= 0:
+        return finish("no_price")
+    name = f"{info['title']} #{info['number']}" if info["number"] else info["title"]
+    if is_hat_collection(collection):
+        finish('awaiting_choice')
+        queue_staking_deposit(user,info,collection,name,value,portal,event)
+        return 'awaiting_choice'
+    user["balance"] = ton(user["balance"] + value)
+    try:
+        _quest_record_deposit(db, user, amount=value, payment_id="nft:" + info["key"])
+    except ValueError:
+        pass
+    credit_referral_bonus(user, value)
+    relayer_stats_add(info["sender_id"], value)
+    finish("credited", uid=user["id"], price_ton=value, portal_ton=portal, collection=collection)
+    queue_deposit_notice(user,'gift',value,'nft:'+info['key'],send_bot=False)
+    text, markup = nft_delivered_message(info, collection, name, value)
+    _send_tg_async(user["id"], text, markup, html=True)
+    return "credited"
+
+
+def relayer_apply_scan(result):
+
+    doc = relayer_doc()
+    state = doc["state"]
+    if result.get("status") != "online":
+        state.update(authorized=False, status=result.get("status", "error"))
+        return {"ok": False, "status": state["status"], "processed": 0}
+    baseline = not state.get("baseline_ready")
+    processed = delivered = 0
+    for info in result["gifts"]:
+        status = relayer_credit(info, baseline=baseline)
+        processed += 0 if status in ("duplicate", "pending_price") else 1
+        delivered += 1 if status == "credited" else 0
+    state.update(authorized=True, status="online", account=result.get("account") or state.get("account", {}),
+                 baseline_ready=True, last_scan=int(time.time()), saved_gifts_count=len(result["gifts"]), error="")
+    if result.get("stars_balance") is not None:
+        state["stars_balance"] = int(result["stars_balance"])
+    doc["gifts"] = [{k: g.get(k, "") for k in ("slug", "title", "number", "model", "backdrop", "sender_id", "transfer_stars", "can_transfer_at")}
+                    for g in result["gifts"][:300]]
+    save_db()
+    return {"ok": True, "status": "online", "processed": processed, "delivered": delivered,
+            "baseline": baseline, "saved_gifts_count": len(result["gifts"])}
+
+
+RELAYER_SCAN_MUTEX = threading.Lock()
+
+
+def relayer_scan(force=False):
+
+    if not RELAYER_SCAN_MUTEX.acquire(timeout=60 if force else 0):
+        return {"ok": False, "status": "busy", "processed": 0}
+    try:
+        return _relayer_scan(force)
+    finally:
+        RELAYER_SCAN_MUTEX.release()
+
+
+def relayer_kick():
+
+    try:
+        if RELAYER_SCAN_MUTEX.locked() or not relayer_lib.available():
+            return
+        doc = relayer_doc()
+        if not (doc.get("enabled") and doc.get("session") and all(relayer_creds())):
+            return
+        if time.time() - int(doc["state"].get("last_scan") or 0) < RELAYER_SCAN_SECONDS * 3:
+            return
+        threading.Thread(target=lambda: relayer_scan(), daemon=True).start()
+    except Exception as exc:
+        print(f"relayer kick failed: {exc}", flush=True)
+
+
+def _relayer_scan(force=False):
+    with lock:
+        doc = relayer_doc()
+        if doc["auth"].get("status") in ("qr_starting", "qr_wait", "code_sent", "need_password"):
+            return {"ok": False, "status": "login_in_progress", "processed": 0}
+        if not (doc.get("enabled") or force):
+            return {"ok": False, "status": "disabled", "processed": 0}
+        api_id, api_hash = relayer_creds()
+        session = doc.get("session", "")
+    if not (api_id and api_hash):
+        return {"ok": False, "status": "not_configured", "processed": 0}
+    result, session2 = relayer_lib.run(relayer_lib.fetch_gifts(api_id, api_hash, session))
+    with lock:
+        if session2 and session2 != relayer_doc().get("session"):
+            relayer_doc()["session"] = session2
+        stats = relayer_apply_scan(result)
+    if stats.get("ok"):
+        try:
+            stats["withdrawn"] = relayer_process_withdrawals()
+        except Exception as exc:
+            print(f"relayer withdrawals failed: {exc}", flush=True)
+            msg = relayer_lib.explain(exc)
+            with lock:
+                for req in db.setdefault("withdrawals", {}).values():
+                    if req.get("status") == "pending" and req.get("auto") == "queued":
+                        fresh = req.get("auto_error") != msg
+                        req["auto_error"], req["auto_status"] = msg, "relayer_error"
+                        if fresh:
+                            tgt = db["users"].get(req["uid"])
+                            pz = next((p for p in (tgt or {}).get("prizes", []) if p.get("id") == req["prize_id"]), None)
+                            if tgt and pz:
+                                _notify_admins_withdrawal(tgt, pz, req, error=msg)
+                save_db()
+    return stats
+
+
+def relayer_loop():
+    time.sleep(5)
+    while True:
+        try:
+            if relayer_lib.available():
+                with lock:
+                    run = bool(relayer_doc().get("enabled") and all(relayer_creds()) and relayer_doc().get("session"))
+                if run:
+                    relayer_scan()
+        except BaseException as exc:
+            print(f"relayer scan failed: {type(exc).__name__}: {exc}", flush=True)
+            try:
+                with lock:
+                    relayer_doc()["state"]["error"] = relayer_lib.explain(exc) if isinstance(exc, Exception) else str(exc)[:180]
+            except Exception:
+                pass
+        time.sleep(RELAYER_SCAN_SECONDS)
+
+
+def relayer_auto():
+    saved = relayer_doc().get("auto")
+    saved = saved if isinstance(saved, dict) else {}
+    try:
+        limit = float(saved.get("limit_ton", 10))
+    except (TypeError, ValueError):
+        limit = 10.0
+    return {"enabled": saved.get("enabled", True) is not False,
+            "limit_enabled": saved.get("limit_enabled", True) is not False, "limit_ton": limit if limit > 0 else 10.0}
+
+
+def prize_withdraw_target(prize):
+
+    if prize.get("nft_slug"):
+        return {"slug": prize["nft_slug"], "collection": "", "model": ""}
+    tier = str(prize.get("tier") or "")
+    if tier in ('random','onyx','black'):
+        entry=next((value for key,value in CATALOG.items() if {_norm(key),_norm(value.get('name'))}&{'witchhat','witchhead','bechat','beachhead'}),{})
+        target={'slug':'','collection':entry.get('name') or 'Witch Hat','model':''}
+        if tier in ('onyx','black'):target['backdrop']='Onyx Black' if tier=='onyx' else 'Black'
+        else:target['excluded_backdrops']=['Black','Onyx Black']
+        return target
+    if tier.startswith("gift:"):
+        _, key, model = (tier.split(":", 2) + ["", ""])[:3]
+        entry = gifts_map().get(key)
+        if entry:
+            return {"slug": "", "collection": entry.get("name", key), "model": model}
+    return None
+
+
+def auto_withdraw_block_reason(user, prize):
+
+    if not str(user["id"]).startswith("tg"):
+        return "Игрок без Telegram-аккаунта"
+    doc = relayer_doc()
+    if not doc.get("enabled"):
+        return "Релейер выключен"
+    if not all(relayer_creds()) or not doc["state"].get("authorized"):
+        return "Релейер не авторизован (войдите в управлении релейером)"
+    auto = relayer_auto()
+    if not auto["enabled"]:
+        return "Автовывод выключен в настройках релейера"
+    if auto["limit_enabled"] and prize["value"] > auto["limit_ton"] + 1e-9:
+        return f"Цена {prize['value']:g} GRAM выше лимита автовывода {auto['limit_ton']:g} GRAM"
+    if prize_withdraw_target(prize) is None:
+        return "Для этого приза нет данных для поиска подарка на релейере"
+    return None
+
+
+def auto_withdraw_eligible(user, prize):
+    return auto_withdraw_block_reason(user, prize) is None
+
+
+def relayer_process_withdrawals(limit=6):
+
+    with lock:
+        if not relayer_ready():
+            return 0
+        now, jobs = time.time(), []
+        reserved=sorted({p['nft_slug'].lower() for player in db['users'].values() for p in player.get('prizes',[]) if p.get('nft_slug') and p.get('status') in ('owned','deposit_pending','staked','withdraw_pending')})
+        api_id, api_hash = relayer_creds()
+        session = relayer_doc().get("session", "")
+        for req in db.setdefault("withdrawals", {}).values():
+            if req.get('status')=='approved' and req.get('transfer')=='failed' and 'Нет данных для поиска подарка' in str(req.get('transfer_error','')):
+                player=db['users'].get(req['uid']);item=next((p for p in (player or {}).get('prizes',[]) if p.get('id')==req['prize_id']),None)
+                if player and item and item.get('status')=='withdraw_pending' and auto_withdraw_eligible(player,item):
+                    req.update(status='pending',auto='queued',transfer='retrying',auto_status='',auto_error='',retry_at=0)
+            if req.get("status") == "pending" and req.get("auto") == "manual" and req.get("auto_status") in (None, "", "not_eligible"):
+
+                tgt = db["users"].get(req["uid"])
+                pz = next((p for p in (tgt or {}).get("prizes", []) if p.get("id") == req["prize_id"]), None)
+                if tgt and pz and pz.get("status") == "withdraw_pending" and auto_withdraw_eligible(tgt, pz):
+                    req.update(auto="queued", auto_error="", auto_status="")
+            if req.get("status") != "pending" or req.get("auto") != "queued" or req.get("retry_at", 0) > now:
+                continue
+            target = db["users"].get(req["uid"])
+            prize = next((p for p in (target or {}).get("prizes", []) if p.get("id") == req["prize_id"]), None)
+            traits = prize_withdraw_target(prize) if prize and prize.get("status") == "withdraw_pending" else None
+            if not traits:
+                req["auto"] = "manual"
+                continue
+            jobs.append({"id": req["id"], "tg_id": int(str(target["id"])[2:]), "username": target.get("username", ""), 'exclude_slugs':reserved, **traits})
+            if len(jobs) >= limit:
+                break
+    if not jobs:
+        return 0
+    results, session2 = relayer_lib.run(relayer_lib.transfer_jobs(api_id, api_hash, session, jobs))
+    done = 0
+    with lock:
+        if session2:
+            relayer_doc()["session"] = session2
+        for res in results:
+            req = db["withdrawals"].get(res["id"])
+            if not req or req.get("status") != "pending":
+                continue
+            target = db["users"].get(req["uid"])
+            prize = next((p for p in (target or {}).get("prizes", []) if p.get("id") == req["prize_id"]), None)
+            req["updated"] = int(time.time())
+            if res["status"] == "completed" and prize:
+                req.update(status="completed", auto="done", moderator="relayer", auto_slug=res.get("slug", ""), auto_error="")
+                prize["status"] = "withdrawn"
+                _send_bot_message(req["uid"], "withdraw_completed", gift=prize["name"], prize=prize)
+                done += 1
+                continue
+            if res["status"] == "not_found" and prize:
+                req.update(auto="failed", auto_error=res.get("error", ""), auto_status="not_found")
+                _notify_admins_withdrawal(target, prize, req, error="Подарок не найден на релейере — нужен ручной вывод")
+                continue
+            first_error = req.get("auto_error") != res.get("error", "")
+            req["auto_error"] = res.get("error", "")
+            req["auto_status"] = res["status"]
+            req["attempts"] = req.get("attempts", 0) + (0 if res["status"] in ("blocked", "insufficient_stars") else 1)
+            if req["attempts"] >= 5 or res["status"] == "recipient_unavailable":
+                req["auto"] = "failed"
+            else:
+                req["retry_at"] = int(time.time()) + (600 if res["status"] in ("blocked", "insufficient_stars") else 60)
+            if (first_error or req["auto"] == "failed") and target and prize:
+                _notify_admins_withdrawal(target, prize, req, error=req["auto_error"] or res["status"])
+        save_db()
+    return done
+
+
+RELAYER_QR_INSTANCE = secrets.token_hex(8)
+
+
+def relayer_status_view():
+    doc = relayer_doc()
+    if doc["auth"].get("status") in ("qr_starting", "qr_wait") and doc["auth"].get("instance") != RELAYER_QR_INSTANCE:
+
+        doc["auth"] = {"status": "qr_expired"}
+        doc["state"].update(status="qr_expired", authorized=False, error="")
+    if not doc["state"].get("authorized") and doc["auth"].get("status") in ("code_sent", "need_password"):
+        doc["state"]["status"] = doc["auth"]["status"]
+    api_id, api_hash = relayer_creds()
+    events = sorted(doc["events"].values(), key=lambda e: e.get("at", 0), reverse=True)[:25]
+    return {
+        "available": relayer_lib.available(),
+        "enabled": bool(doc.get("enabled")),
+        "api_id": api_id,
+        "api_hash_set": bool(api_hash),
+        "api_hash_mask": mask_key(api_hash),
+        "state": {k: doc["state"].get(k) for k in ("authorized", "status", "account", "last_scan", "saved_gifts_count", "error", "baseline_ready", "stars_balance")},
+        "auto": relayer_auto(),
+        "gifts": doc.get("gifts", []),
+        "withdrawals": [{"id": r["id"], "name": r.get("name", ""), "image": r.get("image", ""), "value_ton": r.get("value_ton", 0),
+                         "status": r.get("status"), "auto": r.get("auto", ""), "auto_error": r.get("auto_error", ""),
+                         "updated": r.get("updated", 0), "uid": r["uid"],
+                         "user": (db["users"].get(r["uid"]) or {}).get("username") or r["uid"]}
+                        for r in sorted((r for r in db.get("withdrawals", {}).values() if r.get("auto") in ("queued", "done", "failed")),
+                                        key=lambda r: r.get("updated", 0), reverse=True)[:25]],
+        "auth": {"status": doc["auth"].get("status", ""), "phone": doc["auth"].get("phone", ""),
+                 "delivery": doc["auth"].get("delivery", ""), "next": doc["auth"].get("next", ""),
+                 "qr_url": doc["auth"].get("qr_url", "") if doc["auth"].get("status") == "qr_wait" else ""},
+        "accept_percent": round(GIFT_ACCEPT_RATE * 100),
+        "stats": relayer_stats_view(),
+        "refresh_seconds": RELAYER_SCAN_SECONDS,
+        "events": events,
+    }
+
+
+@route("/api/admin/relayer/status")
+def admin_relayer_status(user, body):
+    require_admin(user)
+    return relayer_status_view()
+
+
+@route("/api/admin/relayer/settings")
+def admin_relayer_settings(user, body):
+    require_admin(user)
+    doc = relayer_doc()
+    if "enabled" in body:
+        doc["enabled"] = bool(body["enabled"])
+    api_id = str(body.get("api_id", doc.get("api_id", "")) or "").strip()
+    if api_id and not api_id.isdigit():
+        raise ApiError("bad_request")
+    doc["api_id"] = api_id
+    auto = dict(doc.get("auto") or {})
+    if "auto_enabled" in body:
+        auto["enabled"] = bool(body["auto_enabled"])
+    if "auto_limit_enabled" in body:
+        auto["limit_enabled"] = bool(body["auto_limit_enabled"])
+    if "auto_limit_ton" in body:
+        try:
+            limit = float(body["auto_limit_ton"])
+        except (TypeError, ValueError):
+            raise ApiError("bad_request")
+        if not 0 < limit <= 1_000_000:
+            raise ApiError("bad_request")
+        auto["limit_ton"] = round(limit, 4)
+    doc["auto"] = auto
+    api_hash = str(body.get("api_hash") or "").strip()
+    if api_hash:
+        if not re.fullmatch(r"[0-9a-fA-F]{16,64}", api_hash):
+            raise ApiError("bad_request")
+        doc["api_hash"] = api_hash
+    return relayer_status_view()
+
+
+def _relayer_session_args():
+    with lock:
+        doc = relayer_doc()
+        api_id, api_hash = relayer_creds()
+        return api_id, api_hash, doc.get("session", ""), dict(doc["auth"])
+
+
+def _relayer_store(session, status=None, auth=None, account=None):
+    with lock:
+        doc = relayer_doc()
+        if session:
+            doc["session"] = session
+        if auth is not None:
+            doc["auth"] = auth
+        if status:
+            doc["state"].update(status=status, authorized=status == "authorized" or status == "online", error="")
+        if account:
+            doc["state"]["account"] = account
+
+
+@admin_io("/api/admin/relayer/login/phone")
+def admin_relayer_phone(body):
+    phone = re.sub(r"[^0-9+]", "", str(body.get("phone") or ""))
+    if not re.fullmatch(r"\+?[0-9]{8,16}", phone):
+        raise ApiError("bad_phone")
+    api_id, api_hash, session, _ = _relayer_session_args()
+    with lock:
+        if not relayer_doc()["state"].get("authorized"):
+            session = ""
+    result, session = relayer_lib.run(relayer_lib.phone_start(api_id, api_hash, session, phone))
+    if result["status"] == "authorized":
+        _relayer_store(session, "online", {"status": "authorized"}, result["account"])
+        return relayer_status_view_locked()
+    _relayer_store(session, "code_sent", {"status": "code_sent", "phone": phone, "phone_code_hash": result["phone_code_hash"],
+                                          "delivery": result.get("delivery", ""), "next": result.get("next", "")})
+    return relayer_status_view_locked()
+
+
+def _relayer_qr_worker(attempt_id, api_id, api_hash):
+    def on_url(url):
+        with lock:
+            doc = relayer_doc()
+            if doc["auth"].get("attempt_id") != attempt_id:
+                return False
+            if doc["auth"].get("qr_url") == url:
+                return True
+            doc["auth"] = {"status": "qr_wait", "attempt_id": attempt_id, "instance": RELAYER_QR_INSTANCE, "qr_url": url}
+            doc["state"].update(status="qr_wait", authorized=False, error="")
+            save_db()
+        return True
+    try:
+        result, session = relayer_lib.run(relayer_lib.qr_login_flow(api_id, api_hash, on_url))
+        status = result["status"]
+        if status == "cancelled":
+            return
+        with lock:
+            if relayer_doc()["auth"].get("attempt_id") != attempt_id:
+                return
+            if status == "authorized":
+                _relayer_store(session, "online", {"status": "authorized"}, result["account"])
+            elif status == "need_password":
+                _relayer_store(session, "need_password", {"status": "need_password", "attempt_id": attempt_id})
+            else:
+                _relayer_store(None, "qr_expired", {"status": "qr_expired", "attempt_id": attempt_id})
+    except Exception as exc:
+        print(f"relayer qr failed: {type(exc).__name__}: {exc}", flush=True)
+        with lock:
+            doc = relayer_doc()
+            if doc["auth"].get("attempt_id") == attempt_id:
+                doc["auth"] = {"status": "qr_error", "attempt_id": attempt_id}
+                doc["state"].update(status="login_error", authorized=False, error=relayer_lib.explain(exc))
+    with lock:
+        save_db()
+    try:
+        flush_db()
+    except Exception as exc:
+        print(f"relayer qr persistence failed: {exc}", flush=True)
+
+
+@admin_io("/api/admin/relayer/login/qr")
+def admin_relayer_qr(body):
+    api_id, api_hash, _, _ = _relayer_session_args()
+    if not (api_id and api_hash):
+        raise relayer_lib.RelayerError("Сначала сохраните API ID и API hash Telegram.")
+    relayer_lib._imports()
+    attempt_id = secrets.token_hex(8)
+    with lock:
+        doc = relayer_doc()
+        if doc["state"].get("authorized"):
+            return relayer_status_view()
+        doc["auth"] = {"status": "qr_starting", "attempt_id": attempt_id, "instance": RELAYER_QR_INSTANCE}
+        doc["state"].update(status="qr_starting", authorized=False, error="")
+        save_db()
+    threading.Thread(target=_relayer_qr_worker, args=(attempt_id, api_id, api_hash), daemon=True).start()
+    deadline = time.time() + 6
+    while time.time() < deadline:
+        with lock:
+            if relayer_doc()["auth"].get("status") != "qr_starting":
+                break
+        time.sleep(0.15)
+    return relayer_status_view_locked()
+
+
+@admin_io("/api/admin/relayer/login/session")
+def admin_relayer_session(body):
+
+    string = re.sub(r"\s+", "", str(body.get("session") or ""))
+    if not 100 <= len(string) <= 2000 or not re.fullmatch(r"[A-Za-z0-9_=+/-]+", string):
+        raise ApiError("bad_session", 400, message="Вставьте строку сессии целиком (её выводит tools/relayer_login.py).")
+    api_id, api_hash, _, _ = _relayer_session_args()
+    result, session = relayer_lib.run(relayer_lib.session_check(api_id, api_hash, string))
+    _relayer_store(session or string, "online", {"status": "authorized"}, result["account"])
+    return relayer_status_view_locked()
+
+
+@admin_io("/api/admin/relayer/login/resend")
+def admin_relayer_resend(body):
+    api_id, api_hash, session, auth = _relayer_session_args()
+    if not auth.get("phone") or not auth.get("phone_code_hash"):
+        raise relayer_lib.RelayerError("Сначала запросите код входа.")
+    result, session = relayer_lib.run(relayer_lib.resend_code(api_id, api_hash, session, auth["phone"], auth["phone_code_hash"]))
+    _relayer_store(session, "code_sent", dict(auth, status="code_sent", phone_code_hash=result["phone_code_hash"] or auth["phone_code_hash"],
+                                              delivery=result.get("delivery", ""), next=result.get("next", "")))
+    return relayer_status_view_locked()
+
+
+@admin_io("/api/admin/relayer/login/code")
+def admin_relayer_code(body):
+    code = re.sub(r"\D", "", str(body.get("code") or ""))
+    if not 3 <= len(code) <= 8:
+        raise ApiError("bad_code")
+    api_id, api_hash, session, auth = _relayer_session_args()
+    if not auth.get("phone") or not auth.get("phone_code_hash"):
+        raise relayer_lib.RelayerError("Сначала запросите код входа.")
+    password = str(body.get("password") or "")
+    result, session = relayer_lib.run(relayer_lib.code_submit(api_id, api_hash, session, auth["phone"], code, auth["phone_code_hash"], password or None))
+    if result["status"] == "need_password":
+        _relayer_store(session, "need_password", dict(auth, status="need_password"))
+    else:
+        _relayer_store(session, "online", {"status": "authorized"}, result["account"])
+    return relayer_status_view_locked()
+
+
+@admin_io("/api/admin/relayer/login/password")
+def admin_relayer_password(body):
+    password = str(body.get("password") or "")
+    if not password:
+        raise ApiError("bad_request")
+    api_id, api_hash, session, _ = _relayer_session_args()
+    result, session = relayer_lib.run(relayer_lib.password_submit(api_id, api_hash, session, password))
+    _relayer_store(session, "online", {"status": "authorized"}, result["account"])
+    return relayer_status_view_locked()
+
+
+@admin_io("/api/admin/relayer/logout")
+def admin_relayer_logout(body):
+    api_id, api_hash, session, _ = _relayer_session_args()
+    if session:
+        try:
+            relayer_lib.run(relayer_lib.logout(api_id, api_hash, session))
+        except Exception as exc:
+            print(f"relayer logout failed: {exc}", flush=True)
+    with lock:
+        doc = relayer_doc()
+        doc.pop("session", None)
+        doc["auth"] = {"status": "logged_out"}
+        doc["state"].update(authorized=False, status="logged_out", account={}, baseline_ready=False)
+    return relayer_status_view_locked()
+
+
+@admin_io("/api/admin/relayer/scan")
+def admin_relayer_scan(body):
+    stats = relayer_scan(force=True)
+    return {**relayer_status_view_locked(), "scan": stats}
+
+
+def relayer_status_view_locked():
+    with lock:
+        return relayer_status_view()
+
+
+@app.get("/nft-img/<slug>.png")
+def nft_image(slug):
+
+    slug = re.sub(r"[^A-Za-z0-9_-]+", "", slug)[:80].lower()
+    if not slug:
+        return ("", 404)
+    data = NFT_IMG_CACHE.get(slug)
+    if data is None:
+        try:
+            req = urllib.request.Request(f"https://nft.fragment.com/gift/{slug}.webp", headers={"User-Agent": "Mozilla/5.0"})
+            with urllib.request.urlopen(req, timeout=8) as resp:
+                raw = resp.read(4_000_000)
+            data = relayer_lib.crop_png(raw)
+        except Exception as exc:
+            print(f"nft image {slug}: {exc}", flush=True)
+            from flask import redirect
+            return redirect(f"https://nft.fragment.com/gift/{slug}.webp", 302)
+        if len(NFT_IMG_CACHE) >= NFT_IMG_CACHE_MAX:
+            NFT_IMG_CACHE.pop(next(iter(NFT_IMG_CACHE)))
+        NFT_IMG_CACHE[slug] = data
+    resp = app.response_class(data, mimetype="image/png")
+    resp.headers["Cache-Control"] = "public, max-age=86400"
+    return resp
+
+
+
+
+
+CRYPTO_MIN, CRYPTO_MAX = 0.1, 10000.0
+CRYPTO_TTL = 1800
+
+
+def crypto_cfg():
+    saved = db["settings"].get("crypto_pay")
+    saved = dict(saved) if isinstance(saved, dict) else {}
+    env = str(os.environ.get("CRYPTO_PAY_API_TOKEN") or "").strip()
+    token = env or str(saved.get("token") or "").strip()
+    return {"token": token, "env_token": bool(env), "testnet": bool(saved.get("testnet", False)),
+            "enabled": bool(saved.get("enabled", False)) and bool(token),
+            "app_name": str(saved.get("app_name") or ""), "app_id": saved.get("app_id")}
+
+
+def crypto_public():
+    return {"enabled": bool(crypto_cfg()["enabled"] and BOT_TOKEN), "min_ton": CRYPTO_MIN, "max_ton": CRYPTO_MAX}
+
+
+def crypto_request(method, payload=None, cfg=None):
+    cfg = cfg or crypto_cfg()
+    if not cfg["token"]:
+        raise ApiError("crypto_not_configured", 503)
+    host = "https://testnet-pay.crypt.bot" if cfg["testnet"] else "https://pay.crypt.bot"
+    req = urllib.request.Request(
+        f"{host}/api/{method}", data=json.dumps(payload or {}).encode(),
+        headers={"Content-Type": "application/json", "Accept": "application/json",
+                 "User-Agent": "Mozilla/5.0 (compatible; HatDrop/1.0)",
+                 "Crypto-Pay-API-Token": cfg["token"]}, method="POST")
+    try:
+        try:
+            with urllib.request.urlopen(req, timeout=12) as resp:
+                data = json.load(resp)
+        except urllib.error.HTTPError as exc:
+
+            try:
+                data = json.load(exc)
+            except Exception:
+                print(f"cryptobot {method}: HTTP {exc.code}", flush=True)
+                raise ApiError("crypto_unavailable", 502)
+            if not isinstance(data, dict):
+                raise ApiError("crypto_unavailable", 502)
+            err = data.get("error")
+            err = err.get("name") if isinstance(err, dict) else err
+            print(f"cryptobot {method}: HTTP {exc.code} {err}", flush=True)
+            raise ApiError("crypto_rejected", 502, reason=str(err or "")[:80])
+    except ApiError:
+        raise
+    except Exception as exc:
+
+        print(f"cryptobot {method}: {type(exc).__name__}", flush=True)
+        raise ApiError("crypto_unavailable", 502)
+    if not isinstance(data, dict) or not data.get("ok"):
+        err = data.get("error") if isinstance(data, dict) else ""
+        err = err.get("name") if isinstance(err, dict) else err
+        raise ApiError("crypto_rejected", 502, reason=str(err or "")[:80])
+    return data["result"]
+
+
+def crypto_webhook_secret(cfg):
+    return hmac.new(cfg["token"].encode(), b"hatdrop-crypto-webhook-v1", hashlib.sha256).hexdigest()
+
+
+def crypto_credit_invoice(invoice):
+
+    if not isinstance(invoice, dict) or invoice.get("status") != "paid":
+        return False
+    invoice_id = str(invoice.get("invoice_id") or "")
+    with lock:
+        orders = db.setdefault("crypto_orders", {})
+        order = next((o for o in orders.values() if o.get("invoice_id") == invoice_id and invoice_id), None)
+        if order is None:
+            order = next((o for o in orders.values() if not o.get("invoice_id") and hmac.compare_digest(o["payload"], str(invoice.get("payload") or ""))), None)
+        if order is None:
+            raise ApiError("unknown_invoice", 409)
+        try:
+            amount = float(invoice.get("amount"))
+        except (TypeError, ValueError):
+            raise ApiError("bad_invoice", 409)
+        if (abs(amount - order["amount"]) > 1e-9 or invoice.get("asset") != "TON" or invoice.get("currency_type", "crypto") != "crypto"
+                or not hmac.compare_digest(order["payload"], str(invoice.get("payload") or ""))):
+            raise ApiError("bad_invoice", 409)
+        if order["status"] == "credited":
+            return False
+        user = db["users"].get(order["uid"])
+        if not user:
+            raise ApiError("unknown_invoice", 409)
+        order.update(status="credited", invoice_id=invoice_id, credited=int(time.time()), testnet=crypto_cfg()["testnet"])
+        if not order["testnet"]:
+            user["balance"] = ton(user["balance"] + order["amount"])
+            try:
+                _quest_record_deposit(db, user, amount=order["amount"], payment_id="crypto:" + order["id"])
+            except ValueError:
+                pass
+            credit_referral_bonus(user, order["amount"])
+            order['bonus_ton'] = credit_deposit_campaign(user, order['amount'], 'crypto:'+order['id'], order.get('deposit_promo_id'))
+            queue_deposit_notice(user,'crypto',order['amount'],'crypto:'+order['id'],order['bonus_ton'])
+        save_db()
+        uid, credited_amount = user["id"], order["amount"]
+    try:
+        flush_db()
+    except Exception as exc:
+        print(f"crypto persistence failed: {exc}", flush=True)
+    return True
+
+
+@app.post("/api/cryptobot/deposit/create")
+def crypto_deposit_create():
+    with lock:
+        user, body = current_user()
+        cfg = crypto_cfg()
+        if not (cfg["enabled"] and BOT_TOKEN):
+            raise ApiError("crypto_disabled", 503)
+        if not str(user["id"]).startswith("tg"):
+            raise ApiError("telegram_required")
+        try:
+            amount = money(float(body.get("amount")))
+        except (TypeError, ValueError, OverflowError):
+            raise ApiError("bad_request")
+        if not CRYPTO_MIN <= amount <= CRYPTO_MAX:
+            raise ApiError("bad_amount", min_ton=CRYPTO_MIN, max_ton=CRYPTO_MAX)
+        orders = db.setdefault("crypto_orders", {})
+        now = int(time.time())
+        for o in orders.values():
+            if o["uid"] == user["id"] and o["status"] == "active" and o["expires"] > now and abs(o["amount"] - amount) < 1e-9 and o.get('deposit_promo_id', '') == deposit_campaign_id(user) and o.get("url"):
+                return jsonify({"ok": True, "order_id": o["id"], "invoice_url": o["url"], "amount": amount, "reused": True})
+        if sum(1 for o in orders.values() if o["uid"] == user["id"] and now - o["created"] < 300) >= 5:
+            raise ApiError("too_many_requests", 429)
+        order_id, payload = secrets.token_hex(10), secrets.token_urlsafe(24)
+        orders[order_id] = {"id": order_id, "uid": user["id"], "amount": amount, "payload": payload, "invoice_id": "", "url": "",
+                            "status": "creating", "created": now, "expires": now + CRYPTO_TTL, "deposit_promo_id": deposit_campaign_id(user)}
+        if len(orders) > 2000:
+            for old in sorted(orders, key=lambda k: orders[k]["created"])[:len(orders) - 2000]:
+                orders.pop(old)
+        save_db()
+        bot_name = db["settings"].get("bot_username", "")
+        uid = user["id"]
+    data = {"currency_type": "crypto", "asset": "TON", "amount": f"{amount:.2f}", "payload": payload,
+            "description": f"HatDrop · пополнение {amount:g} GRAM", "allow_comments": False, "allow_anonymous": False,
+            "expires_in": CRYPTO_TTL}
+    if bot_name:
+        data.update(paid_btn_name="openBot", paid_btn_url="https://t.me/" + bot_name)
+    try:
+        invoice = crypto_request("createInvoice", data, cfg)
+        url = str(invoice.get("bot_invoice_url") or invoice.get("pay_url") or "")
+        if not url.startswith(("https://t.me/", "https://pay.crypt.bot/", "https://testnet-pay.crypt.bot/")):
+            raise ApiError("crypto_rejected", 502)
+    except ApiError:
+        with lock:
+            db["crypto_orders"][order_id]["status"] = "failed"
+        raise
+    with lock:
+        db["crypto_orders"][order_id].update(invoice_id=str(int(invoice["invoice_id"])), url=url, status="active")
+        save_db()
+    if invoice.get("status") == "paid":
+        crypto_credit_invoice(invoice)
+    return jsonify({"ok": True, "order_id": order_id, "invoice_url": url, "amount": amount})
+
+
+@app.post("/api/cryptobot/deposit/verify")
+def crypto_deposit_verify():
+    with lock:
+        user, body = current_user()
+        order = db.get("crypto_orders", {}).get(str(body.get("order_id") or ""))
+        if not order or order["uid"] != user["id"]:
+            raise ApiError("not_found", 404)
+        if order["status"] == "credited":
+            return jsonify({"status": "credited", "balance_ton": ton(user["balance"])})
+        if not order["invoice_id"]:
+            raise ApiError("not_ready", 409)
+        invoice_id, cfg = order["invoice_id"], crypto_cfg()
+    result = crypto_request("getInvoices", {"invoice_ids": invoice_id}, cfg)
+    items = result.get("items", []) if isinstance(result, dict) else result
+    invoice = next((x for x in items if str(x.get("invoice_id")) == invoice_id), None)
+    if invoice:
+        crypto_credit_invoice(invoice)
+        if invoice.get("status") == "expired":
+            with lock:
+                if order["status"] == "active":
+                    order["status"] = "expired"
+    with lock:
+        return jsonify({"status": order["status"], "balance_ton": ton(user["balance"])})
+
+
+@app.post("/api/cryptobot/webhook/<secret>")
+def crypto_webhook(secret):
+    cfg = crypto_cfg()
+    if not cfg["token"]:
+        return ("", 404)
+    body = request.get_data(cache=True)
+    expected = hmac.new(hashlib.sha256(cfg["token"].encode()).digest(), body, hashlib.sha256).hexdigest()
+    if (len(body) > 65536 or not hmac.compare_digest(secret, crypto_webhook_secret(cfg))
+            or not hmac.compare_digest(request.headers.get("crypto-pay-api-signature", ""), expected)):
+        return jsonify({"error": "bad_signature"}), 403
+    data = request.get_json(silent=True) or {}
+    if data.get("update_type") != "invoice_paid":
+        return jsonify({"ok": True, "ignored": True})
+    try:
+        credited = crypto_credit_invoice(data.get("payload"))
+    except ApiError as e:
+        return jsonify({"error": e.code}), 409
+    return jsonify({"ok": True, "credited": credited})
+
+
+def crypto_admin_view():
+    cfg = crypto_cfg()
+    out = {"configured": bool(cfg["token"]), "enabled": cfg["enabled"], "testnet": cfg["testnet"],
+           "env_token": cfg["env_token"], "app_name": cfg["app_name"], "bot_ready": bool(BOT_TOKEN)}
+    if cfg["token"]:
+        out["webhook_url"] = request.url_root.rstrip("/") + "/api/cryptobot/webhook/" + crypto_webhook_secret(cfg)
+    return out
+
+
+@route("/api/admin/cryptobot")
+def admin_cryptobot(user, body):
+    require_admin(user)
+    return crypto_admin_view()
+
+
+@admin_io("/api/admin/cryptobot/save")
+def admin_cryptobot_save(body):
+    with lock:
+        cfg = crypto_cfg()
+        saved = dict(db["settings"].get("crypto_pay") or {})
+    token = str(body.get("token") or "").strip()
+    if len(token) > 500 or "\n" in token or "\r" in token:
+        raise ApiError("bad_request")
+    proposed = {"token": cfg["token"] if cfg["env_token"] or not token else token,
+                "testnet": bool(body.get("testnet", cfg["testnet"])), "enabled": bool(body.get("enabled", cfg["enabled"]))}
+    if proposed["enabled"] and not proposed["token"]:
+        raise ApiError("crypto_token_missing")
+    if proposed["token"]:
+        identity = crypto_request("getMe", {}, proposed)
+        proposed.update(app_id=identity.get("app_id"), app_name=str(identity.get("name") or "")[:100])
+    with lock:
+        if not cfg["env_token"]:
+            saved["token"] = proposed["token"]
+        saved.update(testnet=proposed["testnet"], enabled=proposed["enabled"],
+                     app_id=proposed.get("app_id"), app_name=proposed.get("app_name", ""))
+        db["settings"]["crypto_pay"] = saved
+        return crypto_admin_view()
+
+
+@route("/api/admin/emojis")
+def admin_emojis(user, body):
+    require_admin(user)
+    doc = emoji_doc()
+    return {"saved": sorted(doc["saved"].values(), key=lambda x: x["id"]), "ton": doc["ton"],
+            "ton_preview": ton_emoji_html(), "notice": EMOJI_NOTICE}
+
+
+@admin_io("/api/admin/emojis/add")
+def admin_emoji_add(body):
+    eid = str(body.get("id") or "").strip()
+    if not EMOJI_ID_RE.match(eid):
+        raise ApiError("bad_emoji_id", 400, message="Введите корректный ID эмодзи (только цифры).")
+    found = fetch_custom_emoji_map([eid]).get(eid)
+    if not found:
+        raise ApiError("emoji_not_found", 404, message="Telegram не нашёл эмодзи с таким ID.")
+    with lock:
+        emoji_doc()["saved"][eid] = {"id": eid, "emoji": found["emoji"] or "⭐", "set_name": found["set_name"]}
+        return {"ok": True, "item": emoji_doc()["saved"][eid]}
+
+
+@route("/api/admin/emojis/remove")
+def admin_emoji_remove(user, body):
+    require_admin(user)
+    eid = str(body.get("id") or "")
+    doc = emoji_doc()
+    doc["saved"].pop(eid, None)
+    if doc["ton"].get("id") == eid:
+        doc["ton"] = {}
+    for key in [k for k, v in doc["gifts"].items() if v.get("id") == eid]:
+        doc["gifts"].pop(key)
+    save_db()
+    return {"ok": True}
+
+
+def _emoji_assign(body, target):
+
+    eid = str(body.get("emoji_id") or "").strip()
+    if not eid:
+        with lock:
+            doc = emoji_doc()
+            if target == "ton":
+                doc["ton"] = {}
+            else:
+                doc["gifts"].pop(target, None)
+            return {"ok": True, "item": {}}
+    if not EMOJI_ID_RE.match(eid):
+        raise ApiError("bad_emoji_id", 400, message="Введите корректный ID эмодзи (только цифры).")
+    found = fetch_custom_emoji_map([eid]).get(eid)
+    if not found or not found["emoji"]:
+        raise ApiError("emoji_not_found", 404, message="Telegram не нашёл premium-эмодзи с таким ID.")
+    item = {"id": eid, "emoji": found["emoji"]}
+    with lock:
+        doc = emoji_doc()
+        doc["saved"][eid] = {**item, "set_name": found["set_name"]}
+        if target == "ton":
+            doc["ton"] = item
+        else:
+            doc["gifts"][target] = item
+        return {"ok": True, "item": item}
+
+
+@admin_io("/api/admin/emojis/ton")
+def admin_emoji_ton(body):
+    return _emoji_assign(body, "ton")
+
+
+@route("/api/admin/gift-emojis")
+def admin_gift_emojis(user, body):
+    require_admin(user)
+    term = str(body.get("q") or "").strip().casefold()[:80]
+    gifts = emoji_doc()["gifts"]
+    items = []
+    for key, entry in gifts_map().items():
+        name = str(entry.get("name") or key)
+        if term and term not in name.casefold() and term not in key.casefold():
+            continue
+        item = gifts.get(key) or {}
+        items.append({"gift_id": key, "name": name, "image": gift_image(key),
+                      "emoji_id": item.get("id", ""), "emoji": item.get("emoji", "")})
+    items.sort(key=lambda x: x["name"].casefold())
+    return {"items": items[:600]}
+
+
+@admin_io("/api/admin/gift-emojis/save")
+def admin_gift_emoji_save(body):
+    key = str(body.get("gift_id") or "")
+    with lock:
+        if key not in gifts_map():
+            raise ApiError("not_found", 404, message="Подарок не найден в каталоге.")
+    return _emoji_assign(body, key)
+
+
+STARTER_EMOJIS = [
+    ("5368324170671202286", "Лайк"), ("5424972470023104089", "Огонь"), ("5438496463044752972", "Звезда"),
+    ("5172484558305625218", "Telegram Stars"), ("5206607081334906820", "Галочка"), ("5805532930662996322", "Подтверждено"),
+    ("5210952531676504517", "Крестик"), ("5240241223632954241", "Отмена"), ("5447644880824181073", "Внимание"),
+    ("5420323339723881652", "Красный"), ("5274099962655816924", "Восклицание"), ("5276032951342088188", "Взрыв"),
+    ("5224607267797606837", "Молния"), ("5456140674028019486", "Сирена"), ("5458603043203327669", "Колокольчик"),
+    ("5409048419211682843", "Доллар"), ("5406683434124859552", "Скидка"), ("5769403330761593044", "Кошелёк"),
+    ("5449683594425410231", "Рост"), ("5472169951538224541", "Ракета"), ("5962891847964562880", "Кубок"),
+    ("4996980495100150380", "Сердце"),
+]
+
+
+@admin_io("/api/admin/emojis/pack")
+def admin_emoji_pack(body):
+    raw = str(body.get("link") or "").strip()
+    m = re.search(r"(?:t\.me|telegram\.me)/addemoji/([A-Za-z0-9_]{3,64})", raw) or re.fullmatch(r"([A-Za-z0-9_]{3,64})", raw)
+    if not m:
+        raise ApiError("bad_pack", 400, message="Вставьте ссылку на набор вида https://t.me/addemoji/НАЗВАНИЕ.")
+    try:
+        pack = tg_api("getStickerSet", name=m.group(1)) or {}
+    except Exception:
+        raise ApiError("pack_not_found", 404, message="Набор не найден или недоступен.")
+    if pack.get("sticker_type") != "custom_emoji":
+        raise ApiError("bad_pack", 400, message="Это не набор premium-эмодзи (нужна ссылка t.me/addemoji/…).")
+    stickers = [s for s in (pack.get("stickers") or []) if s.get("custom_emoji_id")]
+    with lock:
+        saved = emoji_doc()["saved"]
+        for s in stickers:
+            eid = str(s["custom_emoji_id"])
+            saved[eid] = {"id": eid, "emoji": str(s.get("emoji") or "")[:32] or "⭐", "set_name": str(pack.get("name") or "")}
+    return {"ok": True, "title": str(pack.get("title") or ""), "added": len(stickers)}
+
+
+@admin_io("/api/admin/emojis/starter")
+def admin_emoji_starter(body):
+    resolved = fetch_custom_emoji_map([e[0] for e in STARTER_EMOJIS])
+    with lock:
+        saved = emoji_doc()["saved"]
+        for eid, item in resolved.items():
+            saved[eid] = {"id": eid, "emoji": item["emoji"] or "⭐", "set_name": item["set_name"]}
+    return {"ok": True, "added": len(resolved), "total": len(STARTER_EMOJIS)}
+
+
+_EMOJI_THUMBS = {}
+
+
+@app.get("/api/admin/emoji-thumb/<emoji_id>")
+def admin_emoji_thumb(emoji_id):
+    with lock:
+        allowed = bool(admin_session_user())
+    if not allowed or not EMOJI_ID_RE.match(emoji_id) or not BOT_TOKEN:
+        return ("", 404)
+    cached = _EMOJI_THUMBS.get(emoji_id)
+    if cached is None:
+        try:
+            st = (tg_api("getCustomEmojiStickers", custom_emoji_ids=[emoji_id]) or [{}])[0]
+            thumb = (st.get("thumbnail") or {}).get("file_id")
+            if not thumb and not st.get("is_animated") and not st.get("is_video"):
+                thumb = st.get("file_id")
+            if not thumb:
+                return ("", 404)
+            path = tg_api("getFile", file_id=thumb)["file_path"]
+            with urllib.request.urlopen(f"https://api.telegram.org/file/bot{BOT_TOKEN}/{path}", timeout=10) as r:
+                cached = (r.read(400000), r.headers.get("Content-Type") or "image/webp")
+        except Exception:
+            return ("", 404)
+        if len(_EMOJI_THUMBS) > 600:
+            _EMOJI_THUMBS.clear()
+        _EMOJI_THUMBS[emoji_id] = cached
+    resp = Response(cached[0], mimetype=cached[1])
+    resp.headers["Cache-Control"] = "private, max-age=86400"
+    return resp
+
+
+
+NFT_PRIZE_RATE = 0.85
+
+
+def season_doc():
+    doc = db.setdefault("season", {})
+    doc.setdefault("history", [])
+    return doc
+
+
+def season_current():
+    return season_doc().get("current")
+
+
+def season_active(now=None):
+    cur = season_current()
+    now = int(now or time.time())
+    return bool(cur and not cur.get("finished") and cur["start"] <= now < cur["end"])
+
+
+def season_score(user, cur):
+    return float(((user.get("boss_turnover") if cur.get("mode") == "boss" else user.get("season_turnover")) or {}).get(cur["id"], 0) or 0)
+
+
+def boss_personal_damage(user, cur):
+    saved = user.get('boss_damage_hp', {})
+    return float(saved.get(cur['id'], season_score(user, cur) / cur['boss']['ton_per_hp']))
+
+
+def freeze_boss_damage(cur):
+    for player in db['users'].values():
+        player.setdefault('boss_damage_hp', {}).setdefault(cur['id'], boss_personal_damage(player, cur))
+
+
+def season_ranking(cur):
+    rows = [u for u in db["users"].values() if season_score(u, cur) > 0]
+    rows.sort(key=lambda u: boss_personal_damage(u, cur) if cur.get('mode') == 'boss' else season_score(u, cur), reverse=True)
+    return rows
+
+
+def nft_model_price(title, slug, model):
+
+    collection = nft_collection(title, slug)
+    if not collection:
+        return 0.0, "", ""
+    try:
+        if model:
+            for m in gift_models(collection):
+                if _norm(m["model"]) == _norm(model):
+                    return ton(m["price_ton"]), collection, "model"
+        return ton(gift_floor(collection)), collection, "floor"
+    except ApiError:
+        return 0.0, collection, ""
+
+
+def season_fetch_nft_page(slug):
+    req = urllib.request.Request(f"https://t.me/nft/{slug}", headers={"User-Agent": "Mozilla/5.0 (compatible; HatDrop/1.0)", "Accept": "text/html"})
+    with urllib.request.urlopen(req, timeout=8) as resp:
+        return resp.read(1_500_000).decode("utf-8", "replace")
+
+
+def season_resolve_prize(spec):
+
+    kind = str((spec or {}).get("kind") or "")
+    if kind == "gift":
+        key = str(spec.get("gift") or "")
+        model = str(spec.get("model") or "")
+        with lock:
+            if key not in gifts_map():
+                raise ApiError("bad_request", 400, message="Подарок не найден в каталоге.")
+            target = resolve_target({"gift": key, "model": model}, "gift")
+        return {"kind": "gift", "gift": key, "model": model, "name": target["name"], "image": target["image"],
+                "value": money(target["value"]), "link": ""}
+    if kind == "nft":
+        try:
+            slug = season_lib.nft_slug(spec.get("url"))
+        except ValueError as exc:
+            raise ApiError("bad_request", 400, message=str(exc))
+        try:
+            info = season_lib.parse_nft_page(season_fetch_nft_page(slug))
+        except Exception:
+            raise ApiError("nft_unreachable", 409, message="Не удалось открыть страницу подарка в Telegram. Проверьте ссылку.")
+        title = season_lib.collection_title(slug)
+        with lock:
+            price, collection, basis = nft_model_price(title, slug, info.get("model", ""))
+        if price <= 0:
+            raise ApiError("no_price", 409, message="Не удалось определить цену подарка на Portals. Каталог не загружен или коллекции нет.")
+        number = re.search(r"-(\d+)$", slug).group(1)
+        name = info.get("title") or f"{title} #{number}"
+        return {"kind": "nft", "slug": slug, "url": f"https://t.me/nft/{slug}", "link": f"https://t.me/nft/{slug}", "name": name[:140],
+                "model": info.get("model", ""), "backdrop": info.get("backdrop", ""), "basis": basis,
+                "image": f"/nft-img/{slug.lower()}.png", "portal_ton": price, "value": money(price * NFT_PRIZE_RATE)}
+    raise ApiError("bad_request", 400, message="Выберите тип награды.")
+
+
+def season_public_prize(spec):
+    return {"kind": spec["kind"], "name": spec["name"], "image": spec["image"], "value_ton": spec["value"], "link": spec.get("link", "")}
+
+
+def season_award(user, spec):
+    if spec["kind"] == "gift":
+        target = resolve_target({"gift": spec["gift"], "model": spec.get("model", "")}, "gift")
+        prize = add_prize(user, target["tier"], target["name"], target["value"], target["image"])
+        prize["source"] = "season"
+    else:
+        prize = add_prize(user, f"nft:{spec['slug']}", spec["name"], spec["value"], spec["image"])
+        prize.update(sell_rate=1.0, source="season", nft_slug=spec["slug"], portal_ton=spec.get("portal_ton", 0))
+    return prize
+
+
+def boss_view(cur):
+    if not cur or cur.get("mode") != "boss":
+        return None
+    b = cur["boss"]
+    return {"name": b["name"], "image": b["image"], "transparent": b["transparent"], "hp": b["hp"],
+            "damage": min(b["hp"], b.get("damage", 0)), "ton_per_hp": b["ton_per_hp"], "damage_rates": b.get("damage_rates", {"upgrade":1,"chests":1}),
+            "defeated": b.get("damage", 0) + 1e-8 >= b["hp"], "status": cur.get("result", "active"),
+            "participant_rewards": [boss_reward_display(r) for r in cur.get("participant_rewards", [])]}
+
+
+def boss_hit(user, cost, ts=None, mode='upgrade'):
+    cur = season_current()
+    now = time.time() if ts is None else ts
+    if not cur or cur.get("mode") != "boss" or cur.get("finished"):
+        return
+    if now >= cur["end"]:
+        season_finish(cur, award=False)
+        return
+    if now < cur["start"] or cost <= 0 or not str(user["id"]).startswith("tg") or user.get("demo"):
+        return
+    b = cur["boss"]
+    rate = b.get('damage_rates', {}).get(mode, 1)
+    if rate <= 0: return
+    contribution = min(cost, max(0, b['hp'] - b.get('damage', 0)) * b['ton_per_hp'] / rate)
+    old_damage = boss_personal_damage(user, cur)
+    damage = contribution / b['ton_per_hp'] * rate
+    user.setdefault('boss_damage_hp', {})[cur['id']] = round(old_damage + damage, 8)
+    ledger = user.setdefault("boss_turnover", {})
+    ledger[cur["id"]] = ton(ledger.get(cur["id"], 0) + contribution)
+    b["damage"] = min(b["hp"], round(b.get("damage", 0) + damage, 8))
+    if b["damage"] + 1e-8 >= b["hp"]:
+        b["damage"] = b["hp"]
+        season_finish(cur)
+
+
+def boss_fixed_prize(user, spec):
+    if spec["kind"] == "gift":
+        prize = add_prize(user, f"gift:{spec['gift']}:{spec.get('model', '')}", spec["name"], spec["value"], spec["image"])
+        prize["source"] = "season"
+    else:
+        prize = add_prize(user, f"nft:{spec['slug']}", spec["name"], spec["value"], spec["image"])
+        prize.update(sell_rate=1.0, source="season", nft_slug=spec["slug"], portal_ton=spec.get("portal_ton", 0))
+
+
+def boss_reward_display(reward):
+    kind = reward['kind']
+    if kind == 'free_coin':
+        return {'kind':kind,'amount':int(reward['amount']),'name':'Монета фриспина','image':'/static/free-coins/coin.png'}
+    if kind in ('balance','hatcoin'):
+        return {'kind':kind,'amount':reward['amount'],'name':'GRAM' if kind=='balance' else 'HatCoin','image':'/images/gram.webp' if kind=='balance' else '/images/hatcoin.webp'}
+    if kind == 'item':
+        return {'kind':kind,'name':reward.get('name') or weapons_lib.WEAPONS[reward['weapon']]['name'],'image':weapon_image(reward['weapon'])}
+    target = reward.get('target') or reward
+    return {'kind':kind,'name':target.get('name','Подарок'),'image':target.get('image','')}
+
+
+def boss_reward_lines(cur, place):
+    lines = []
+    spec = cur.get("prizes", {}).get(str(place))
+    if spec:
+        collection = spec.get("gift") or nft_collection(spec["name"], spec.get("slug", ""))
+        lines.append(f'{gift_emoji_html(collection)} <b>{html.escape(spec["name"])}</b>')
+    for reward in cur.get("participant_rewards", []):
+        kind = reward["kind"]
+        if kind == "gift":
+            target = reward["target"]
+            lines.append(f'{gift_emoji_html(_prize_collection_key(target))} <b>{html.escape(target["name"])}</b>')
+        elif kind == "item":
+            lines.append('🧰 <b>' + html.escape(reward["name"]) + '</b>')
+        else:
+            unit = 'монет фриспина' if kind == 'free_coin' else 'GRAM' if kind == 'balance' else 'HatCoin'
+            lines.append(('💎' if kind == 'balance' else '🪙') + f' <b>{reward["amount"]:g} {unit}</b>')
+    return lines
+
+
+def queue_boss_notifications(cur, ranked):
+
+    queue = db.setdefault("boss_notifications", {})
+    config = bot_editor_config()["messages"]
+    for place, user in enumerate(ranked, 1):
+        if not user["id"].startswith("tg") or user.get("demo"):
+            continue
+        lines = boss_reward_lines(cur, place) if cur["result"] == "defeated" else []
+        key = 'boss_victory' if lines else 'boss_victory_none' if cur["result"] == 'defeated' else 'boss_expired' if cur["result"] == 'expired' else 'boss_cancelled'
+        payload = message_payload(config, key, _bot_app_url(), name=user.get("first_name"),
+                                  gift_emoji='\n'.join(lines), extra={"place": place, "season": cur["boss"]["name"]})
+        identity = cur["id"] + ':' + user["id"]
+        queue.setdefault(identity, {"uid": user["id"], "payload": payload, "status": "pending", "attempts": 0, "next": 0})
+
+    for identity in [key for key,row in queue.items() if row.get("status") in ("sent", "unreachable") and row.get("completed_at", 0) < time.time()-90*86400]:
+        del queue[identity]
+
+
+def deliver_boss_notifications(limit=20, queue_name="boss_notifications"):
+
+    if not BOT_TOKEN:
+        return
+    with lock:
+        now = time.time()
+        jobs = [(key, copy.deepcopy(row)) for key,row in db.get(queue_name, {}).items()
+                if row.get("status") == "pending" and row.get("next", 0) <= now][:limit]
+    if not jobs:
+        return
+
+    flush_db()
+    for key, job in jobs:
+        payload = job["payload"]
+        def send(text, markup):
+            extra = {"reply_markup": markup} if markup else {}
+            try:
+                if payload.get('photo'):
+                    return tg_api('sendPhoto',chat_id=int(job['uid'][2:]),photo=payload['photo'],caption=text,parse_mode='HTML',**extra)
+                return tg_api("sendMessage", chat_id=int(job["uid"][2:]), text=text, parse_mode="HTML", link_preview_options={"is_disabled": True}, **extra)
+            except urllib.error.HTTPError as exc:
+                try:
+                    description = json.loads(exc.read(8192)).get("description", str(exc))
+                except (ValueError, OSError):
+                    description = str(exc)
+                raise ValueError(description) from exc
+        error = None
+        try:
+            try:
+                send(payload["text"], payload.get("reply_markup"))
+            except Exception as exc:
+
+                if any(word in str(exc).lower() for word in ("custom emoji", "emoji_id", "emoji-id", "parse entities", "button_type_invalid")):
+                    send(*_strip_custom_emoji(payload["text"], payload.get("reply_markup")))
+                else:
+                    raise
+        except Exception as exc:
+            error = str(exc)[:400]
+        with lock:
+            row = db.get(queue_name, {}).get(key)
+            if not row or row.get("status") != "pending":
+                continue
+            row["attempts"] += 1
+            if error:
+                row.update(error=error, next=time.time()+min(3600, 30*2**min(row["attempts"], 7)))
+                if any(word in error.lower() for word in ("bot was blocked", "user is deactivated", "chat not found")):
+                    row.update(status="unreachable", completed_at=int(time.time()))
+            else:
+                row.update(status="sent", completed_at=int(time.time()))
+                row.pop("payload", None)
+                row.pop("error", None)
+            save_db()
+        flush_db()
+
+
+def boss_finish(cur, award=True):
+    if cur.get("finished"):
+        return
+    ranked = season_ranking(cur)
+    defeated = cur["boss"].get("damage", 0) + 1e-8 >= cur["boss"]["hp"]
+    award = award and (defeated or cur.get('manual_award') is True)
+    final_rows = [{"damage_hp": boss_personal_damage(u, cur), "rank": i+1, "uid": u["id"], "name": display_name(u), "avatar": avatar(u), "total_ton": ton(season_score(u, cur))} for i,u in enumerate(ranked[:50])]
+    updates, winners = {}, []
+    if award:
+        for u in ranked:
+            updated = copy.deepcopy(u)
+            rewards = cur.get("participant_rewards", [])
+            for r in sorted(rewards, key=lambda r: bool(weapons_lib.required_theme(r.get("weapon", "")))):
+                if r["kind"] == "item":
+                    grant_weapon(updated, r["weapon"])
+                elif r["kind"] == "balance":
+                    updated["balance"] = ton(updated["balance"] + r["amount"])
+                elif r["kind"] == "hatcoin":
+                    updated["hatcoin_units"] = updated.get("hatcoin_units", 0) + round(r["amount"] * HATCOIN_UNITS)
+                elif r['kind'] == 'free_coin':
+                    updated['free_spin_coins'] = free_coin_balance(updated) + r['amount']
+                elif r["kind"] == "gift":
+                    target = r["target"]
+                    prize = add_prize(updated, target["tier"], target["name"], target["value"], target["image"])
+                    prize["source"] = "season"
+            updates[u["id"]] = updated
+        for place, spec in sorted(cur.get("prizes", {}).items(), key=lambda pair: int(pair[0])):
+            idx = int(place)-1
+            if idx >= len(ranked):
+                continue
+            u = ranked[idx]
+            boss_fixed_prize(updates[u["id"]], spec)
+            winners.append({"place": int(place), "uid": u["id"], "name": display_name(u), "prize": spec["name"], "value_ton": spec["value"]})
+
+        for uid, updated in updates.items():
+            db["users"][uid].clear()
+            db["users"][uid].update(updated)
+    if award and cur.get('manual_award'):
+        cur['boss']['damage'] = cur['boss']['hp']
+    result = "defeated" if award else "expired" if time.time() >= cur["end"] else "cancelled"
+    cur.update(finished=True, finished_at=int(time.time()), result=result, final_rows=final_rows, winners=winners,
+               participant_awards=len(updates) if award and cur.get("participant_rewards") else 0)
+    queue_boss_notifications(cur, ranked)
+    hist = season_doc()["history"]
+    hist.insert(0, {"id": cur["id"], "name": cur["name"], "start": cur["start"], "end": cur["end"], "mode": "boss", "result": result, "winners": winners})
+    del hist[20:]
+    save_db()
+
+
+def clean_boss_settings(body):
+    mode = body.get("mode", "normal")
+    if mode not in ("normal", "boss"):
+        raise ApiError("bad_request")
+    if mode == "normal":
+        return {"mode": "normal"}
+    raw = body.get("boss") or {}
+    if not isinstance(raw, dict):
+        raise ApiError("bad_request")
+    try:
+        hp, ratio = float(raw.get("hp")), float(raw.get("ton_per_hp", 1))
+    except (TypeError, ValueError):
+        raise ApiError("bad_request")
+    if not math.isfinite(hp) or not math.isfinite(ratio) or not 1 <= hp <= 1_000_000_000 or not .000001 <= ratio <= 1_000_000:
+        raise ApiError("bad_request", 400, message="Проверьте HP босса и GRAM за 1 HP.")
+    damage_rates = {}
+    for key in ('upgrade', 'chests'):
+        try: value = float((raw.get('damage_rates') or {}).get(key, 1))
+        except (ValueError, TypeError): raise ApiError('bad_request')
+        if not math.isfinite(value) or not 0 <= value <= 1000: raise ApiError('bad_request', message='Множитель урона: от 0 до 1000.')
+        damage_rates[key] = value
+    image = str(raw.get("image") or "")
+    filename = image.removeprefix("/media/")
+    if not image.startswith("/media/") or not media_assets.NAME.fullmatch(filename) or not os.path.isfile(os.path.join(MEDIA_DIR, filename)):
+        raise ApiError("bad_image", 400, message="Сначала загрузите изображение босса.")
+
+    from PIL import Image
+    with Image.open(os.path.join(MEDIA_DIR, filename)) as picture:
+        transparent = picture.convert("RGBA").getchannel("A").getextrema()[0] < 255
+    rewards = body.get("participant_rewards", [])
+    rewards = clean_promo_rewards(rewards) if rewards else []
+    granted = {r.get("weapon") for r in rewards if r["kind"] == "item"}
+    for r in rewards:
+        if r["kind"] == "item" and weapons_lib.required_theme(r["weapon"]) and weapons_lib.required_theme(r["weapon"]) not in granted:
+            raise ApiError("theme_required", 400, message="Награду участникам со связанным снаряжением выдавайте вместе с оформлением.")
+        if r["kind"] == "gift":
+            r["target"] = resolve_target(r, "gift")
+    return {"mode": "boss", "boss": {"name": str(raw.get("name") or "Босс").strip()[:60] or "Босс", "image": image,
+            "transparent": transparent, "hp": hp, "ton_per_hp": ratio, "damage": 0, "damage_rates": damage_rates}, "participant_rewards": rewards}
+
+
+def season_finish(cur, award=True):
+
+    if cur.get("finished"):
+        return
+    if cur.get("mode") == "boss":
+        return boss_finish(cur, award)
+    ranked = season_ranking(cur)
+    winners, final_rows = [], []
+    for i, u in enumerate(ranked[:50]):
+        final_rows.append({"rank": i + 1, "uid": u["id"], "name": display_name(u), "avatar": avatar(u), "total_ton": ton(season_score(u, cur))})
+    if award:
+        for place, spec in sorted(cur.get("prizes", {}).items(), key=lambda kv: int(kv[0])):
+            idx = int(place) - 1
+            if idx >= len(ranked):
+                continue
+            u = ranked[idx]
+            try:
+                season_award(u, spec)
+            except Exception as exc:
+                print(f"season award failed ({place}): {exc}", flush=True)
+                continue
+            winners.append({"place": int(place), "uid": u["id"], "name": display_name(u), "prize": spec["name"], "value_ton": spec["value"]})
+    prized = {w["uid"]: (spec_ for place_, spec_ in cur.get("prizes", {}).items() if int(place_) == w["place"]) for w in winners}
+    for row in final_rows:
+        u = db["users"].get(row["uid"])
+        if not u or row["total_ton"] <= 0:
+            continue
+        spec = next(iter(prized.get(row["uid"], [])), None)
+        pseudo = {"tier": f"gift:{spec['gift']}:"} if spec and spec.get("kind") == "gift" else None
+        _send_bot_message(row["uid"], "season_place_prize" if spec else "season_place_none", gift=spec["name"] if spec else None,
+                          prize=pseudo, extra={"place": row["rank"], "season": cur["name"]})
+    cur.update(finished=True, finished_at=int(time.time()), final_rows=final_rows, winners=winners)
+    hist = season_doc()["history"]
+    hist.insert(0, {"id": cur["id"], "name": cur["name"], "start": cur["start"], "end": cur["end"], "winners": winners})
+    del hist[20:]
+    save_db()
+
+
+def season_tick():
+    with lock:
+        cur = season_current()
+        if cur and not cur.get("finished") and (time.time() >= cur["end"] or (cur.get("mode") == "boss" and cur["boss"].get("damage", 0) >= cur["boss"]["hp"])):
+            season_finish(cur)
+            return True
+    return False
+
+
+def season_loop():
+    time.sleep(8)
+    while True:
+        try:
+            if season_tick():
+                flush_db()
+            if not app.config.get("TESTING"):
+                deliver_boss_notifications()
+        except BaseException as exc:
+            print(f"season tick failed: {type(exc).__name__}: {exc}", flush=True)
+        time.sleep(20)
+
+
+def season_admin_view():
+    cur = season_current()
+    out = {"current": None, "history": season_doc()["history"][:10], "max_places": season_lib.MAX_PLACES, "now": int(time.time())}
+    if cur:
+        out["current"] = {
+            "id": cur["id"], "edit_version": cur.get("edit_version",0), "name": cur["name"], "start": cur["start"], "end": cur["end"], "finished": bool(cur.get("finished")),
+            "prizes": cur.get("prizes", {}), "winners": cur.get("winners", []), "mode": cur.get("mode", "normal"), "boss": boss_view(cur), "participant_rewards": cur.get("participant_rewards", []), "result": cur.get("result", ""), "participant_awards": cur.get("participant_awards", 0),
+            "players": len(season_ranking(cur)) if not cur.get("finished") else len(cur.get("final_rows", [])),
+            "top": [{"rank": i + 1, "name": display_name(u), "total_ton": ton(season_score(u, cur))} for i, u in enumerate(season_ranking(cur)[:10])] if not cur.get("finished") else cur.get("final_rows", [])[:10],
+        }
+    return out
+
+
+@route("/api/admin/season")
+def admin_season(user, body):
+    require_admin(user)
+    return season_admin_view()
+
+
+@admin_io("/api/admin/season/resolve")
+def admin_season_resolve(body):
+    spec = season_resolve_prize(body)
+    return {"prize": spec}
+
+
+def _season_prizes_from(body):
+    prizes = {}
+    raw = body.get("prizes") if isinstance(body.get("prizes"), dict) else {}
+    for place, spec in raw.items():
+        try:
+            key = season_lib.place_key(place)
+        except ValueError:
+            raise ApiError("bad_request", 400, message="Неверное место награды.")
+        if spec and spec.get("kind"):
+            prizes[key] = season_resolve_prize(spec)
+    return prizes
+
+
+@admin_io("/api/admin/season/start")
+def admin_season_start(body):
+    try:
+        seconds = season_lib.duration_seconds(body)
+    except ValueError:
+        raise ApiError("bad_request", 400, message="Укажите длительность сезона (дни и/или часы, до 90 дней).")
+    prizes = _season_prizes_from(body)
+    extra = clean_boss_settings(body)
+    with lock:
+        cur = season_current()
+        if cur and not cur.get("finished"):
+            raise ApiError("season_active", 409, message="Сезон уже идёт. Завершите его или дождитесь конца.")
+        now = int(time.time())
+        db["season"]["current"] = {"id": "s" + secrets.token_hex(4), "name": season_lib.clean_name(body.get("name")),
+                                   "start": now, "end": now + seconds, "prizes": prizes, "finished": False, **extra}
+        return season_admin_view()
+
+
+@admin_io("/api/admin/season/prizes")
+def admin_season_prizes(body):
+    with lock:
+        cur = season_current()
+        if not cur or cur.get('finished'): raise ApiError('no_season',409,message='Нет активного сезона.')
+        identity = cur['id']; version = cur.get('edit_version', 0)
+        if body.get('season_id', identity) != identity or body.get('edit_version', version) != version:
+            raise ApiError('season_changed',409,message='Сезон изменён. Обновите страницу.')
+        snapshot = copy.deepcopy(cur)
+    prizes = _season_prizes_from(body) if 'prizes' in body else snapshot.get('prizes', {})
+    extra = None
+    manual_damage = False
+    if snapshot.get('mode') == 'boss' and ('boss' in body or 'participant_rewards' in body):
+        raw = {**snapshot['boss'], **(body.get('boss') or {})}
+        extra = clean_boss_settings({'mode':'boss', 'boss':raw, 'participant_rewards':body.get('participant_rewards',snapshot.get('participant_rewards',[]))})
+        manual_damage = 'damage' in (body.get('boss') or {})
+        try: damage = float(raw.get('damage', snapshot['boss'].get('damage',0)))
+        except (ValueError,TypeError): raise ApiError('bad_request')
+        if not math.isfinite(damage) or not 0 <= damage or (manual_damage and damage > extra['boss']['hp']):
+            raise ApiError('bad_request',message='Урон должен быть от 0 до максимального HP.')
+        extra['boss']['damage'] = damage
+    try: end = int(body.get('end', snapshot['end']))
+    except (ValueError,TypeError): raise ApiError('bad_request')
+    if not time.time() < end <= time.time()+90*86400: raise ApiError('bad_request',message='Окончание сезона: в будущем, не более 90 дней.')
+    with lock:
+        cur = season_current()
+        if not cur or cur['id'] != identity or cur.get('finished') or cur.get('edit_version',0) != version:
+            raise ApiError('season_changed',409,message='Сезон изменён. Обновите страницу.')
+
+
+        before = {k:copy.deepcopy(cur.get(k)) for k in ('name','end','boss','prizes','participant_rewards')}
+        if extra:
+            if not manual_damage: extra['boss']['damage'] = min(extra['boss']['hp'],cur['boss'].get('damage',0))
+            freeze_boss_damage(cur)
+            cur.update(extra)
+        cur.update(prizes=prizes,end=end,name=season_lib.clean_name(body.get('name'),cur['name']),edit_version=version+1)
+        cur.setdefault('edits',[]).append({'at':int(time.time()),'before':before})
+        if len(cur['edits'])>100: del cur['edits'][:-100]
+        if cur.get('mode') == 'boss' and cur['boss']['damage'] >= cur['boss']['hp']: season_finish(cur)
+        save_db()
+        return season_admin_view()
+
+
+@route("/api/admin/season/finish")
+def admin_season_finish(user, body):
+    require_admin(user)
+    cur = season_current()
+    if not cur or cur.get("finished"):
+        raise ApiError("no_season", 409, message="Нет активного сезона.")
+    if body.get('season_id',cur['id']) != cur['id']: raise ApiError('season_changed',409)
+    if cur.get('mode') == 'boss' and body.get('award') is True:
+        cur['manual_award'] = True
+        cur['manual_finish_damage'] = cur['boss'].get('damage',0)
+    season_finish(cur, award=body.get("award") is not False)
+    return season_admin_view()
+
+
+@route("/api/admin/season/clear")
+def admin_season_clear(user, body):
+    require_admin(user)
+    cur = season_current()
+    if cur and not cur.get("finished"):
+        raise ApiError("season_active", 409, message="Сначала завершите сезон.")
+    season_doc().pop("current", None)
+    save_db()
+    return season_admin_view()
+
+
+DEFAULT_ACHIEVEMENTS = [
+    ("turnover", 5, 0, 0.05, "turnover", "Первые ставки: оборот 5 GRAM"),
+    ("turnover", 25, 0, 0.1, "turnover", "Оборот 25 GRAM"),
+    ("turnover", 100, 0, 0.25, "turnover", "Оборот 100 GRAM"),
+    ("turnover", 500, 0, 0.75, "trophy", "Оборот 500 GRAM"),
+    ("turnover", 2000, 0, 2.0, "trophy", "Оборот 2000 GRAM"),
+    ("wheel_spins", 10, 0, 0.05, "wheel", "Десять прокруток рулетки"),
+    ("wheel_spins", 100, 0, 0.2, "wheel", "Сто прокруток рулетки"),
+    ("wheel_spins", 500, 0, 0.6, "wheel", "Пятьсот прокруток рулетки"),
+    ("wheel_wins", 5, 0, 0.05, "star", "Пять побед в рулетке"),
+    ("wheel_wins", 50, 0, 0.3, "star", "Пятьдесят побед в рулетке"),
+    ("upgrade_wins_min", 1, 50, 0.05, "upgrade", "Выиграй апгрейд с шансом от 50%"),
+    ("upgrade_wins_max", 1, 25, 0.3, "flame", "Выиграй апгрейд с шансом до 25%"),
+    ("upgrade_wins_max", 3, 10, 1.0, "flame", "Три победы в апгрейде с шансом до 10%"),
+    ("upgrade_plays_above", 20, 1, 0.15, "upgrade", "Двадцать апгрейдов"),
+    ("mines_plays", 10, 0, 0.05, "mines", "Десять игр в сундуки"),
+    ("mines_plays", 100, 0, 0.3, "mines", "Сто игр в сундуки"),
+    ("mines_gift_wins", 1, 0, 0.1, "gift", "Первый подарок из сундуков"),
+    ("mines_gift_wins", 10, 0, 0.5, "gift", "Десять подарков из сундуков"),
+    ("mines_opened", 100, 0, 0.1, "chest", "Открой 100 безопасных сундуков"),
+    ("deposit_total", 5, 0, 0.1, "deposit", "Пополни баланс на 5 GRAM"),
+]
+
+
+def seed_achievements():
+
+    quests = quest_definitions(db)
+    if db["settings"].get("achievements_seeded") or any(q.get("achievement") for q in quests.values() if isinstance(q, dict)):
+        db["settings"]["achievements_seeded"] = True
+        return
+    now = int(time.time())
+    for i, (kind, goal, threshold, reward, icon, title) in enumerate(DEFAULT_ACHIEVEMENTS, 1):
+        qid = f"ach{i:02d}"
+        new = validate_quest({"kind": kind, "goal": goal, "threshold": threshold, "reward_type": "ton", "reward_amount": reward,
+                              "icon": icon, "title": title, "achievement": True, "active": True})
+        quests[qid] = {**new, "id": qid, "created": now + i, "version": 1}
+    db["settings"]["achievements_seeded"] = True
+    try:
+        flush_quests()
+        flush_db()
+    except Exception as exc:
+        print("achievement seed save failed:", exc, flush=True)
+
+
+def seed_free_hand_offer():
+
+    old = shop_doc()["offers"].get("free_hand")
+    if old and old.get("active", True) and not db["settings"].get("free_hand_off"):
+        db["settings"]["free_hand_off"] = True
+        old["active"] = False
+        try:
+            flush_db()
+        except Exception as exc:
+            print("free hand offer save failed:", exc, flush=True)
+
+
+
+MIRROR_SECONDS = max(30, int(float(os.environ.get("MIRROR_SECONDS", "300"))))
+MIRROR_KEYS = ("db", "db_meta", "quests", "catalog")
+_mirror_state = {"ok": 0, "error": "", "keys": 0, "bytes": 0, "runs": 0}
+_mirror_lock = threading.Lock()
+
+
+def _mask_url(url):
+    return re.sub(r"(://[^:/@]+:)[^@]*@", r"\1***@", str(url or ""))
+
+
+def _test_database(backend, url):
+
+    if backend == "sqlite":
+        text = _sqlite_get("db")
+        users = len(json.loads(text).get("users", {})) if text else 0
+        return {"ok": True, "has_data": bool(text), "users": users}
+    url = _normalize_pg_url(url)
+    if not url.startswith("postgresql://"):
+        raise ApiError("bad_url", 400, message="Ссылка должна начинаться с postgresql:// или postgres://")
+    import psycopg2
+    try:
+        conn = psycopg2.connect(url, connect_timeout=8)
+    except Exception as exc:
+        raise ApiError("db_connect", 400, message=("Не удалось подключиться: " + str(exc).strip().splitlines()[0])[:300])
+    try:
+        conn.autocommit = True
+        with conn.cursor() as c:
+            c.execute("CREATE TABLE IF NOT EXISTS kv (k TEXT PRIMARY KEY, v TEXT NOT NULL)")
+            c.execute("SELECT v FROM kv WHERE k='db'")
+            row = c.fetchone()
+    finally:
+        conn.close()
+    users = 0
+    if row:
+        try:
+            users = len(json.loads(row[0]).get("users", {}))
+        except ValueError:
+            pass
+    return {"ok": True, "has_data": bool(row), "users": users}
+
+
+def mirror_to_sqlite():
+
+    if not DATABASE_URL:
+        return False
+    with _mirror_lock:
+        try:
+            flush_db()
+            n = size = 0
+            for key in MIRROR_KEYS:
+                text = _target_get(key)
+                if text:
+                    _sqlite_put(key, text)
+                    n += 1
+                    size += len(text)
+            _mirror_state.update(ok=int(time.time()), error="", keys=n, bytes=size, runs=_mirror_state["runs"] + 1)
+            return True
+        except Exception as exc:
+            _mirror_state["error"] = str(exc)[:300]
+            print(f"Mirror to SQLite failed: {exc}", flush=True)
+            return False
+
+
+def _mirror_loop():
+    time.sleep(20)
+    while True:
+        mirror_to_sqlite()
+        time.sleep(MIRROR_SECONDS)
+
+
+def switch_database(backend, url, mode):
+    global DATABASE_URL, _pg_conn
+    url = _normalize_pg_url(url) if backend == "postgres" else ""
+    if backend == "postgres" and url == DATABASE_URL:
+        raise ApiError("same_db", 400, message="Эта база уже подключена.")
+    if backend == "sqlite" and not DATABASE_URL:
+        raise ApiError("same_db", 400, message="SQLite уже используется.")
+    info = _test_database(backend, url)
+    if mode == "use_target" and not info["has_data"]:
+        raise ApiError("empty_target", 400, message="В выбранной базе нет данных - выбери «Перенести текущие данные».")
+    flush_db()
+    with _flush_lock:
+        with lock:
+            texts = {"db": json.dumps(db, ensure_ascii=False), "db_meta": json.dumps(_read_meta()),
+                     "quests": quests_snapshot(), "catalog": store_get("catalog", DB_PATH + ".catalog") or ""}
+        old_url = DATABASE_URL
+        DATABASE_URL = url
+        _pg_conn = None
+        try:
+            if mode == "copy_current":
+                for key, text in texts.items():
+                    if text:
+                        store_put(key, DB_PATH + "." + key, text)
+        except Exception:
+            DATABASE_URL = old_url
+            _pg_conn = None
+            raise ApiError("db_copy", 500, message="Не удалось перенести данные, база не переключена.")
+        _write_dbcfg(backend, url)
+        _db_state.update(error="", fallback=False, wanted_url="")
+        _last_saved.update(db=None, catalog=None)
+        if mode == "use_target":
+            with lock:
+                db.clear()
+                load_db()
+                load_catalog()
+        else:
+            _save_meta["rev"] = _read_meta().get("rev", 0)
+    return info
+
+
+RESET_PHRASE = "СБРОСИТЬ ВСЕ ДАННЫЕ"
+
+
+def reset_all_data():
+
+    with lock:
+        snapshot = json.dumps(db, ensure_ascii=False)
+    flush_db()
+    with _flush_lock:
+        stores = [("sqlite", None)]
+        if DATABASE_URL:
+            stores.append(("postgres", DATABASE_URL))
+        for kind, url in stores:
+            if kind == "sqlite":
+                with _sqlite_lock:
+                    conn = _sqlite_conn()
+                    try:
+                        with conn:
+                            conn.execute("DELETE FROM kv")
+                            conn.execute("INSERT INTO kv (k, v) VALUES ('db_before_reset', ?)", (snapshot,))
+                    finally:
+                        conn.close()
+            else:
+                with _pg().cursor() as c:
+                    c.execute("DELETE FROM kv")
+                    c.execute("INSERT INTO kv (k, v) VALUES ('db_before_reset', %s)", (snapshot,))
+        for fname in (DB_PATH, DB_PATH + ".catalog", DB_PATH + ".quests", DB_PATH + ".meta"):
+            try:
+                os.remove(fname)
+            except OSError:
+                pass
+        with lock:
+            db.clear()
+            db.update({"users": {}, "prices": {}, "settings": {}})
+            CATALOG.clear()
+            _last_saved.update(db=None, catalog=None)
+            _save_meta.update(rev=0, conflict=None)
+    with lock:
+        load_db()
+        db["settings"]["reset_at"] = int(time.time())
+        db["settings"]["catalog_version"] = 3
+    seed_achievements()
+    seed_free_hand_offer()
+    apply_tier_values()
+    flush_db()
+    save_catalog()
+    flush_quests()
+    return {"postgres": bool(DATABASE_URL), "sqlite": True}
+
+
+@route("/api/admin/database")
+def admin_database(user, body):
+    require_admin(user)
+    action = str(body.get("action") or "status")
+    out = {}
+    if action == "reset":
+        if str(user["id"]) != "tg" + OWNER_ADMIN_ID:
+            raise ApiError("forbidden", 403, message="Сброс доступен только владельцу.")
+        if str(body.get("phrase") or "").strip() != RESET_PHRASE:
+            raise ApiError("bad_phrase", 400, message="Фраза подтверждения введена неверно.")
+        out = {"reset": reset_all_data()}
+        action = "status"
+    if action == "clear_conflict":
+        _save_meta["conflict"] = None
+        action = "status"
+    backend = str(body.get("backend") or "")
+    url = str(body.get("url") or "").strip()
+    if action == "test":
+        if backend not in ("postgres", "sqlite"):
+            raise ApiError("bad_request")
+        out["test"] = _test_database(backend, url)
+    elif action == "switch":
+        mode = str(body.get("mode") or "copy_current")
+        if backend not in ("postgres", "sqlite") or mode not in ("copy_current", "use_target"):
+            raise ApiError("bad_request")
+        out["test"] = switch_database(backend, url, mode)
+    elif action == "mirror":
+        if not DATABASE_URL:
+            raise ApiError("no_pg", 400, message="Копия делается только при работе на Postgres.")
+        if not mirror_to_sqlite():
+            raise ApiError("mirror_failed", 500, message=_mirror_state["error"] or "Не удалось скопировать.")
+    elif action != "status":
+        raise ApiError("bad_request")
+    cfg = _read_dbcfg()
+    out.update(kind="postgres" if DATABASE_URL else "sqlite", url=_mask_url(DATABASE_URL), sqlite_path=SQLITE_PATH,
+               fallback=_db_state["fallback"], error=_db_state["error"], wanted_url=_mask_url(_db_state["wanted_url"]),
+               mirror=dict(_mirror_state, every=MIRROR_SECONDS, active=bool(DATABASE_URL)),
+               config_saved=bool(cfg), config_path=DBCFG_PATH,
+               env_url=bool(_env_first("DATABASE_URL", "POSTGRES_URL", "POSTGRESQL_URL")),
+               persistent_disk=bool(os.environ.get("SQLITE_PATH") or os.environ.get("DB_PATH") or os.environ.get("DBCONFIG_PATH")))
+    return out
+
+
+
+IMPORT_LABELS = {"users": "Игроки", "settings": "Настройки", "promocodes": "Промокоды", "withdrawals": "Выводы",
+                 "quests": "Квесты", "prices": "Цены подарков", "catalog": "Каталог подарков"}
+IMPORT_TTL = 900
+_import_sessions = {}
+
+
+def _import_read(raw):
+    if raw[:15] != b"SQLite format 3":
+        raise ApiError("bad_file", 400, message="Это не файл SQLite.")
+    import tempfile
+    fd, path = tempfile.mkstemp(suffix=".sqlite3")
+    try:
+        with os.fdopen(fd, "wb") as f:
+            f.write(raw)
+        conn = sqlite3.connect(path)
+        try:
+            rows = dict(conn.execute("SELECT k, v FROM kv WHERE k IN ('db','catalog','quests')").fetchall())
+        except sqlite3.DatabaseError:
+            raise ApiError("bad_file", 400, message="В файле нет данных HatDrop (таблица kv).")
+        finally:
+            conn.close()
+    finally:
+        try:
+            os.remove(path)
+        except OSError:
+            pass
+    try:
+        src = json.loads(rows["db"])
+        if not isinstance(src, dict) or not isinstance(src.get("users"), dict):
+            raise ValueError
+    except (KeyError, ValueError):
+        raise ApiError("bad_file", 400, message="В файле нет данных HatDrop.")
+    data = {k: v for k, v in src.items() if k != "analytics" and isinstance(v, (dict, list))}
+    try:
+        qs = json.loads(rows["quests"])
+        if isinstance(qs, dict) and isinstance(qs.get("quests"), dict):
+            data["quests"] = qs["quests"]
+    except (KeyError, ValueError):
+        pass
+    try:
+        cat = json.loads(rows["catalog"])
+        if isinstance(cat, dict) and cat:
+            data["catalog"] = cat
+    except (KeyError, ValueError):
+        pass
+    return data
+
+
+def _import_current(key):
+    if key == "catalog":
+        return CATALOG
+    return db.get(key)
+
+
+def _import_summary(data):
+    out = []
+    for key, val in data.items():
+        cur = _import_current(key)
+        row = {"id": key, "label": IMPORT_LABELS.get(key, key), "count": len(val),
+               "current": len(cur) if hasattr(cur, "__len__") else 0}
+        if key == "users" and isinstance(val, dict):
+            row["existing"] = sum(1 for uid in val if uid in db["users"])
+        out.append(row)
+    order = list(IMPORT_LABELS)
+    out.sort(key=lambda r: order.index(r["id"]) if r["id"] in order else 99)
+    return out
+
+
+def _import_apply(data, sections):
+    with lock:
+        try:
+            store_put("db_before_import", DB_PATH + ".before_import", json.dumps(db, ensure_ascii=False))
+        except Exception as exc:
+            raise ApiError("import_backup_failed", 500, message=f"Не удалось сохранить текущее состояние перед импортом: {exc}")
+        done = {}
+        for key in sections:
+            val = data[key]
+            if key == "users":
+                imported = {str(k): v for k, v in val.items() if isinstance(v, dict)}
+                db["users"].update(imported)
+                done[key] = len(imported)
+            elif key == "catalog":
+                CATALOG.clear()
+                CATALOG.update(val)
+                done[key] = len(val)
+            else:
+                db[key] = val
+                done[key] = len(val)
+        if "catalog" in sections and "settings" not in sections:
+            db["settings"]["catalog_version"] = max(3, int(db["settings"].get("catalog_version") or 0))
+        if "settings" in sections:
+            db["settings"].setdefault("catalog_version", 3)
+        ensure_analytics(db)
+        events_lib.sync_grants(db)
+    flush_db()
+    if "catalog" in sections:
+        save_catalog()
+    if "quests" in sections or "settings" in sections:
+        try:
+            flush_quests()
+        except Exception as exc:
+            print("quest flush after import failed:", exc, flush=True)
+    return done
+
+
+@route("/api/admin/import")
+def admin_import(user, body):
+    if str(user["id"]) != "tg" + OWNER_ADMIN_ID:
+        raise ApiError("forbidden", 403, message="Импорт доступен только владельцу.")
+    now = time.time()
+    for t in [t for t, v in _import_sessions.items() if now - v["at"] > IMPORT_TTL]:
+        _import_sessions.pop(t, None)
+    action = str(body.get("action") or "analyze")
+    if action == "analyze":
+        import base64
+        try:
+            raw = base64.b64decode(str(body.get("data") or ""), validate=True)
+        except Exception:
+            raise ApiError("bad_file", 400, message="Файл не прочитан.")
+        data = _import_read(raw)
+        token = secrets.token_hex(8)
+        _import_sessions[token] = {"data": data, "at": now}
+        return {"token": token, "sections": _import_summary(data), "target": "postgres" if DATABASE_URL else "sqlite"}
+    if action == "apply":
+        sess = _import_sessions.get(str(body.get("token") or ""))
+        if not sess:
+            raise ApiError("import_expired", 400, message="Файл устарел, загрузите его заново.")
+        sections = [str(x) for x in (body.get("sections") or [])]
+        if not sections or any(x not in sess["data"] for x in sections):
+            raise ApiError("bad_request", 400, message="Выберите, что импортировать.")
+        done = _import_apply(sess["data"], list(dict.fromkeys(sections)))
+        _import_sessions.pop(str(body.get("token")), None)
+        return {"ok": True, "done": done}
+    raise ApiError("bad_request")
+
+
+def event_maintenance():
+
+    with lock:
+        changed = events_lib.tick(db)
+        events_lib.sync_grants(db)
+        if changed:
+            save_db()
+    if changed:
+        flush_quests()
+        flush_db()
+    return changed
+
+
+@app.before_request
+def ensure_event_deadlines():
+
+    try:
+        event_maintenance()
+    except Exception:
+        app.logger.exception("Event deadline maintenance failed")
+        return jsonify(error="event_maintenance_failed"), 503
+
+
+def event_loop():
+    while True:
+        try:
+            event_maintenance()
+        except Exception:
+            app.logger.exception("Event lifecycle worker failed")
+        time.sleep(5)
+
+
+from referral_coins import install as install_referral_coins
+install_referral_coins(globals())
+from tokenwave_ai import install as install_tokenwave_ai
+install_tokenwave_ai(globals())
+from deposit_notices import install as install_deposit_notices
+install_deposit_notices(globals())
+from staking import install as install_staking
+install_staking(globals())
+from nft_animation import install as install_nft_animation
+install_nft_animation(globals())
+from ui_copy import install as install_ui_copy
+install_ui_copy(globals())
+from personal_boss import install as install_personal_boss
+install_personal_boss(globals())
+from theme_lock import install as install_theme_lock
+install_theme_lock(globals())
+threading.Thread(target=deposit_notification_loop,daemon=True).start()
+
+load_db()
+auto_restore_if_empty()
+if ai_recover_jobs():
+    save_db()
+seed_achievements()
+seed_free_hand_offer()
+load_catalog()
+apply_tier_values()
+_install_exit_hooks()
+event_maintenance()
+threading.Thread(target=event_loop, daemon=True).start()
+threading.Thread(target=_saver_loop, daemon=True).start()
+threading.Thread(target=portals_loop, daemon=True).start()
+threading.Thread(target=models_prewarm_loop, daemon=True).start()
+threading.Thread(target=relayer_loop, daemon=True).start()
+threading.Thread(target=season_loop, daemon=True).start()
+threading.Thread(target=referral_rating_loop, daemon=True).start()
+threading.Thread(target=ton_deposit_loop, daemon=True).start()
+threading.Thread(target=_backup_loop, daemon=True).start()
+threading.Thread(target=_mirror_loop, daemon=True).start()
+threading.Thread(target=_tg_backup_loop, daemon=True).start()
+threading.Thread(target=_boot_report, daemon=True).start()
+if KEEPALIVE_URL:
+    threading.Thread(target=keepalive_loop, daemon=True).start()
+if BOT_TOKEN and _env_first("RENDER_EXTERNAL_URL", "PUBLIC_APP_URL", "APP_URL", "SITE_URL"):
+    threading.Thread(target=bot_connect_on_start, daemon=True).start()
+
+if __name__ == "__main__":
+    app.run(host=os.environ.get("HOST", "0.0.0.0"), port=int(os.environ.get("PORT", "8000")), threaded=True)

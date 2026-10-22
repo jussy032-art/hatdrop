@@ -1,0 +1,465 @@
+/* Halloween — pixel styling for the upgrade screen. Pure CSS, no extra images.
+   Pixel unit = 2px. Frame = ink outline + orange bevel + dark inner line. */
+
+html[data-halloween="on"][data-theme][data-sky] {
+  --hw-ui-accent:#ffad19; --hw-ui-button:#ff8015; --hw-ui-button-shine:#ffd06a;
+  --hw-ui-range:#ffc05a; --hw-ui-range-dark:#ff790d; --hw-ui-active:#f56a09;
+  --game-accent:#ff8015; --game-accent-light:#ffd06a; --game-accent-dark:#b94b06;
+
+  --px-ink:#1a0d07; --px-wood:#2b170c; --px-line:#3a1a08;
+  --px-cream:#ffe8c2; --px-gold:#ffc562; --px-orange:#f0892a; --px-orange-dk:#a24a14;
+  --px-blue:#2a4a80; --px-green:#3f7a1e; --px-green-hi:#7cc443;
+  /* frame on a dark plate */
+  /* thin frame: 2px orange bevel (gold top, dark bottom) + 1px dark inner line */
+  --px-frame:inset 0 2px 0 var(--px-gold), inset 0 -2px 0 var(--px-orange-dk), inset 0 0 0 2px var(--px-orange), inset 0 0 0 3px var(--px-line), 0 2px 0 #0009;
+}
+
+/* ---------- top bar balances: copper plaque (same metal as the day/night button), value in a dark recess ---------- */
+html[data-halloween="on"][data-theme][data-sky] .topbar :is(.coin-chip,.balance) {
+  position:relative; display:inline-flex; align-items:center; gap:6px;
+  min-height:36px; padding:4px 12px 4px 14px !important;
+  border:1px solid #250f05 !important; border-radius:7px !important;
+  background:
+    radial-gradient(circle at 6px 6px, #fff0b8 0 .8px, #e3a043 1.4px, #6e3b0d 2.6px, transparent 3px),
+    radial-gradient(circle at 6px calc(100% - 6px), #fff0b8 0 .8px, #e3a043 1.4px, #6e3b0d 2.6px, transparent 3px),
+    radial-gradient(circle at calc(100% - 6px) 6px, #fff0b8 0 .8px, #e3a043 1.4px, #6e3b0d 2.6px, transparent 3px),
+    radial-gradient(circle at calc(100% - 6px) calc(100% - 6px), #fff0b8 0 .8px, #e3a043 1.4px, #6e3b0d 2.6px, transparent 3px),
+    linear-gradient(#d0732f, #a64f1c 55%, #773211) !important;
+  box-shadow:inset 0 1px 0 #f3ad66, inset 0 -1px 0 #4d1f08, 0 2px 0 #0009 !important;
+  color:#ffe8c2 !important; font-size:11px; text-shadow:none !important; filter:none !important;
+}
+html[data-halloween="on"][data-theme][data-sky] .topbar :is(.coin-ico,.ton-ico) {
+  width:20px !important; height:20px !important; flex:none; filter:drop-shadow(0 1px 0 #250f05);
+}
+html[data-halloween="on"][data-theme][data-sky] .topbar :is(#coinValue,#balanceValue) {
+  min-width:34px; padding:4px 7px; border-radius:3px; line-height:1; text-align:right;
+  background:#1a0b05; box-shadow:inset 0 2px 0 #000a, 0 1px 0 #f3ad6688;
+  color:#ffe8c2 !important; text-shadow:0 0 6px #ff9a3c66 !important;
+}
+html[data-halloween="on"][data-theme][data-sky] .topbar .bal-plus {
+  width:20px; height:20px; display:grid; place-items:center; line-height:1;
+  background:linear-gradient(#ffb347, #e0701e) !important; color:#250f05 !important;
+  border:1px solid #250f05 !important; border-radius:4px !important;
+  box-shadow:inset 0 1px 0 #ffe0a0, inset 0 -1px 0 #9a4a16 !important;
+  text-shadow:none !important; font-weight:bold;
+}
+html[data-halloween="on"][data-theme][data-sky] .topbar :is(.coin-chip,.balance):active { transform:translateY(1px); }
+
+/* ---------- day / night button ---------- */
+/* copper plaque with bat wings + skull (static/halloween/sky-button.svg); the plaque is the 44px hit area,
+   wings and skull hang outside it. Art box 176x116, plaque 74x74 at (57,17) -> scale 44/74. */
+html[data-halloween="on"][data-theme][data-sky] #view-upgrade #skyBtn {
+  width:44px !important; height:44px !important; padding:0 !important; overflow:visible !important;
+  background:none !important; border:0 !important; border-radius:0 !important; box-shadow:none !important;
+  filter:none !important; color:#ffe2a0 !important; display:grid; place-items:center; isolation:isolate;
+}
+/* the art is inline in the button (index.html, svg.hw-sky-art) so its parts can move */
+.hw-sky-art { display:none; }
+html[data-halloween="on"][data-theme][data-sky] #view-upgrade #skyBtn svg.hw-sky-art {
+  display:block; position:absolute; z-index:-1; pointer-events:none;
+  left:-33.9px; top:-10.1px; width:104.6px !important; height:69px !important; max-width:none;
+  overflow:visible; filter:drop-shadow(0 2px 0 #0008) !important;
+}
+html[data-halloween="on"][data-theme][data-sky] #view-upgrade #skyBtn :is(.sky-sun,.sky-moon) {
+  width:24px !important; height:24px !important;
+  filter:drop-shadow(0 0 3px #ff9a3c) drop-shadow(0 0 6px #ff7a1acc) !important;
+}
+html[data-halloween="on"][data-theme][data-sky] #view-upgrade #skyBtn:active { transform:none; }
+
+/* parts pivot in the art's own units */
+.hw-sky-art :is(.hsb-wing,.hsb-plaque,.hsb-jaw,.hsb-burst,.hsb-glow,.hsb-eyes) { transform-box:view-box; }
+.hw-sky-art .hsb-wing-l { transform-origin:60px 45px; animation:hsbIdleL 5s ease-in-out infinite; }
+.hw-sky-art .hsb-wing-r { transform-origin:128px 45px; animation:hsbIdleR 5s ease-in-out infinite; }
+.hw-sky-art .hsb-plaque { transform-origin:94px 54px; }
+.hw-sky-art .hsb-glow { transform-origin:94px 54px; animation:hsbGlow 3.2s ease-in-out infinite; }
+.hw-sky-art .hsb-eyes { animation:hsbEyes 2.6s ease-in-out infinite; }
+.hw-sky-art .hsb-jaw { transform-origin:94px 100px; }
+.hw-sky-art .hsb-burst { transform-origin:94px 54px; opacity:0; }
+@keyframes hsbIdleL { 0%,84%,100% { transform:rotate(0) } 89% { transform:rotate(9deg) } 94% { transform:rotate(-4deg) } }
+@keyframes hsbIdleR { 0%,84%,100% { transform:rotate(0) } 89% { transform:rotate(-9deg) } 94% { transform:rotate(4deg) } }
+@keyframes hsbGlow { 0%,100% { opacity:.55; transform:scale(.92) } 50% { opacity:.9; transform:scale(1.04) } }
+@keyframes hsbEyes { 0%,100% { opacity:.35 } 50% { opacity:.8 } }
+
+/* press: plaque dips and springs back, wings flap twice, jaw clacks, eyes + glow flare, spark ring, icon spins in */
+#skyBtn.hw-press .hw-sky-art .hsb-plaque { animation:hsbPress .7s cubic-bezier(.3,.7,.4,1); }
+#skyBtn.hw-press .hw-sky-art .hsb-wing-l { animation:hsbFlapL .75s ease-in-out; }
+#skyBtn.hw-press .hw-sky-art .hsb-wing-r { animation:hsbFlapR .75s ease-in-out; }
+#skyBtn.hw-press .hw-sky-art .hsb-jaw { animation:hsbJaw .6s steps(1,end); }
+#skyBtn.hw-press .hw-sky-art .hsb-eyes { animation:hsbFlare .8s ease-out; }
+#skyBtn.hw-press .hw-sky-art .hsb-glow { animation:hsbFlash .8s ease-out; }
+#skyBtn.hw-press .hw-sky-art .hsb-burst { animation:hsbBurst .7s ease-out; }
+#skyBtn.hw-press :is(.sky-sun,.sky-moon) { animation:hsbIcon .7s cubic-bezier(.3,1.5,.5,1); }
+@keyframes hsbPress { 0% { transform:none } 15% { transform:translateY(3px) scale(.95) } 45% { transform:translateY(-2px) scale(1.03) } 70% { transform:translateY(1px) } 100% { transform:none } }
+@keyframes hsbFlapL { 0%,100% { transform:rotate(0) } 20% { transform:rotate(24deg) } 40% { transform:rotate(-12deg) } 62% { transform:rotate(18deg) } 82% { transform:rotate(-5deg) } }
+@keyframes hsbFlapR { 0%,100% { transform:rotate(0) } 20% { transform:rotate(-24deg) } 40% { transform:rotate(12deg) } 62% { transform:rotate(-18deg) } 82% { transform:rotate(5deg) } }
+@keyframes hsbJaw { 0%,40%,80% { transform:translateY(2.4px) } 20%,60%,100% { transform:none } }
+@keyframes hsbFlare { 0% { opacity:1 } 30% { opacity:1 } 100% { opacity:.4 } }
+@keyframes hsbFlash { 0% { opacity:1; transform:scale(1.45) } 100% { opacity:.6; transform:scale(.95) } }
+@keyframes hsbBurst { 0% { opacity:1; transform:scale(.7) rotate(0) } 100% { opacity:0; transform:scale(1.7) rotate(40deg) } }
+@keyframes hsbIcon { 0% { transform:rotate(-200deg) scale(.3) } 70% { transform:rotate(10deg) scale(1.15) } 100% { transform:none } }
+@media (prefers-reduced-motion: reduce) { .hw-sky-art *, #skyBtn :is(.sky-sun,.sky-moon) { animation:none !important } }
+
+/* ---------- wheel: Halloween ring (art layers .hw-wheel / .hw-wheel-top live inside #wheel, built by tools/build_wheel.py) ---------- */
+#wheel :is(.hw-wheel,.hw-wheel-top) { display:none; }
+html[data-halloween="on"][data-theme][data-sky] #wheel :is(.hw-wheel,.hw-wheel-top) { display:inline; }
+/* the old rings are replaced by the art */
+html[data-halloween="on"][data-theme][data-sky] #wheel :is(.ring-base,.ring-edge,.ring-rim,.theme-wheel-material,.hall-wheel-rim,.hall-track-border) { display:none !important; }
+html[data-halloween="on"][data-theme][data-sky] #wheelScale :is(line,rect) { display:none !important; }
+html[data-halloween="on"][data-theme][data-sky] .wheel-glow,
+html[data-halloween="on"][data-theme][data-sky] .wheel-glass { display:none !important; }
+/* chance track: glowing orange cells for the win part, dark violet for the rest */
+html[data-halloween="on"][data-theme][data-sky] #wheel .ring-arc { stroke-width:18 !important; stroke-opacity:1 !important; filter:none !important; }
+html[data-halloween="on"][data-theme][data-sky] #gradWin stop:first-child { stop-color:#ffb347 !important; }
+html[data-halloween="on"][data-theme][data-sky] #gradWin stop:last-child { stop-color:#e8641a !important; }
+html[data-halloween="on"][data-theme][data-sky] #gradLose stop:first-child { stop-color:#3a2f6e !important; }
+html[data-halloween="on"][data-theme][data-sky] #gradLose stop:last-child { stop-color:#1f1940 !important; }
+/* numbers: bone white, the part covered by the chance turns orange */
+html[data-halloween="on"][data-theme][data-sky] #wheelScale text {
+  font-size:10px !important; fill:#e9dfc8 !important; stroke:#140a05 !important; stroke-width:3.2px !important;
+  paint-order:stroke fill; filter:none !important;
+}
+html[data-halloween="on"][data-theme][data-sky] #wheelScale text.on { fill:#ffb347 !important; }
+html[data-halloween="on"][data-theme][data-sky] #view-upgrade .hat-hint { color:var(--px-gold) !important; text-shadow:2px 2px 0 var(--px-ink) !important; }
+
+/* ---------- chance slider ---------- */
+html[data-halloween="on"][data-theme][data-sky] #view-upgrade .mode-picker { text-shadow:2px 2px 0 var(--px-ink) !important; }
+html[data-halloween="on"][data-theme][data-sky] #view-upgrade .mode-edge {
+  min-width:44px; padding:7px 8px !important; line-height:1; font-size:9px !important; text-align:center; box-sizing:border-box;
+  background:var(--px-wood) !important; border:2px solid var(--px-ink) !important; border-radius:0 !important;
+  box-shadow:var(--px-frame) !important; color:var(--px-cream) !important;
+}
+html[data-halloween="on"][data-theme][data-sky] #view-upgrade :is(.mode-cost,.mode-chance,.prize-value) { color:var(--px-gold) !important; }
+html[data-halloween="on"][data-theme][data-sky] #modeSlider::-webkit-slider-runnable-track {
+  height:14px; border:2px solid var(--px-ink) !important; border-radius:0 !important;
+  background:linear-gradient(to right, var(--px-orange) 0, var(--px-orange) var(--fill,50%), var(--px-wood) var(--fill,50%)) !important;
+  box-shadow:inset 0 2px 0 #ffffff30, inset 0 -2px 0 #0006 !important;
+}
+html[data-halloween="on"][data-theme][data-sky] #modeSlider::-webkit-slider-thumb {
+  width:18px; height:26px; margin-top:-8px;
+  border:2px solid var(--px-ink) !important; border-radius:0 !important; background:var(--px-gold) !important;
+  box-shadow:inset 2px 2px 0 #fff4c8, inset -2px -2px 0 var(--px-orange-dk) !important;
+}
+html[data-halloween="on"][data-theme][data-sky] #modeSlider::-moz-range-track { height:10px; border:2px solid var(--px-ink); border-radius:0; background:var(--px-wood); }
+html[data-halloween="on"][data-theme][data-sky] #modeSlider::-moz-range-progress { height:10px; background:var(--px-orange); }
+html[data-halloween="on"][data-theme][data-sky] #modeSlider::-moz-range-thumb { width:14px; height:22px; border:2px solid var(--px-ink); border-radius:0; background:var(--px-gold); }
+
+/* ---------- "own chance" plaque ---------- */
+html[data-halloween="on"][data-theme][data-sky] #view-upgrade .chance-custom {
+  padding:4px 10px !important; gap:8px;
+  background:var(--px-wood) !important; border:2px solid var(--px-ink) !important; border-radius:0 !important;
+  box-shadow:var(--px-frame) !important; color:var(--px-cream) !important; text-shadow:2px 2px 0 var(--px-ink) !important;
+}
+html[data-halloween="on"][data-theme][data-sky] #view-upgrade .chance-custom input {
+  height:26px !important; padding:2px 4px !important;
+  border:2px solid var(--px-ink) !important; border-radius:0 !important;
+  background:#160b05 !important; color:var(--px-cream) !important; box-shadow:inset 0 2px 0 #000a !important;
+}
+
+/* ---------- action buttons ---------- */
+html[data-halloween="on"][data-theme][data-sky] #view-upgrade :is(#weaponBtn,#spinBtn,#fastBtn) {
+  border:2px solid var(--px-ink) !important; border-radius:0 !important; filter:none !important;
+  background-image:none !important; transition:none !important;
+}
+html[data-halloween="on"][data-theme][data-sky] #view-upgrade :is(#weaponBtn,#spinBtn,#fastBtn) {
+  background:var(--px-orange) !important; color:var(--px-ink) !important;
+  box-shadow:inset 0 4px 0 var(--px-gold), inset 0 -4px 0 var(--px-orange-dk), inset 0 0 0 2px #ffb04a, 0 3px 0 #0009 !important;
+}
+html[data-halloween="on"][data-theme][data-sky] #view-upgrade #spinBtnText { color:#3a1a08 !important; text-shadow:0 2px 0 var(--px-gold) !important; }
+html[data-halloween="on"][data-theme][data-sky] #view-upgrade #weaponBtn img { image-rendering:pixelated; filter:drop-shadow(2px 2px 0 #0007); }
+html[data-halloween="on"][data-theme][data-sky] #view-upgrade #fastBtn { animation:none !important; }
+/* fast mode on: brighter gold plate */
+html[data-halloween="on"][data-theme][data-sky] #view-upgrade #fastBtn[aria-pressed="true"] {
+  background:#ffad19 !important; color:var(--px-ink) !important;
+  box-shadow:inset 0 4px 0 #ffe092, inset 0 -4px 0 #c96a0c, inset 0 0 0 2px #ffd06a, 0 0 0 2px #ffd06a66, 0 3px 0 #0009 !important;
+}
+html[data-halloween="on"][data-theme][data-sky] #view-upgrade :is(#weaponBtn,#spinBtn,#fastBtn):active:not(:disabled) {
+  transform:translateY(3px); box-shadow:inset 0 -4px 0 #0003 !important;
+}
+html[data-halloween="on"][data-theme][data-sky] #view-upgrade :is(#weaponBtn,#spinBtn,#fastBtn):disabled { filter:grayscale(.7) brightness(.8) !important; opacity:1 !important; }
+
+/* ---------- tab bar: colours only (artwork and layout untouched) ---------- */
+html[data-halloween="on"][data-theme][data-sky] .tabbar .tab { color:var(--px-cream) !important; }
+html[data-halloween="on"][data-theme][data-sky] .tabbar .tab.active {
+  background:var(--px-orange) !important; background-image:none !important;
+  border-color:var(--px-ink) !important;
+  box-shadow:inset 0 3px 0 var(--px-gold), inset 0 -3px 0 var(--px-orange-dk), 0 2px 0 #0009 !important;
+  color:var(--px-ink) !important;
+}
+html[data-halloween="on"][data-theme][data-sky] .tabbar .tab.active :is(svg,.ic) { color:var(--px-ink) !important; fill:var(--px-ink) !important; }
+
+/* ---------- gift top-up cards: picture, name, "from" price ---------- */
+#giftList .gift-item { align-items:center; text-align:center; }
+#giftList .gift-val { display:flex; align-items:center; justify-content:center; gap:3px; white-space:nowrap; }
+#giftList .gift-val .ton-ico { width:12px; height:12px; flex:none; }
+
+/* ---------- live boss HP on the upgrade screen: dark plaque in a copper frame ---------- */
+html[data-halloween="on"][data-theme][data-sky] #bossLiveHud {
+  border:1px solid #250f05 !important; border-image:none !important; border-radius:7px !important;
+  padding:9px 14px 7px !important;
+  background:
+    radial-gradient(circle at 7px 7px, #fff0b8 0 .8px, #e3a043 1.4px, #6e3b0d 2.6px, transparent 3px),
+    radial-gradient(circle at calc(100% - 7px) 7px, #fff0b8 0 .8px, #e3a043 1.4px, #6e3b0d 2.6px, transparent 3px),
+    radial-gradient(circle at 7px calc(100% - 7px), #fff0b8 0 .8px, #e3a043 1.4px, #6e3b0d 2.6px, transparent 3px),
+    radial-gradient(circle at calc(100% - 7px) calc(100% - 7px), #fff0b8 0 .8px, #e3a043 1.4px, #6e3b0d 2.6px, transparent 3px),
+    linear-gradient(#1d1026f2, #120a18f2) padding-box !important;
+  box-shadow:inset 0 0 0 3px #a64f1c, inset 0 0 0 4px #f3ad6688, inset 0 0 0 5px #250f05, 0 3px 0 #0009 !important;
+  color:#e9dfc8 !important;
+}
+html[data-halloween="on"][data-theme][data-sky] .boss-live-title { align-items:center !important; }
+html[data-halloween="on"][data-theme][data-sky] #bossLiveName { color:#ffb347 !important; text-shadow:0 2px 0 #000 !important; }
+html[data-halloween="on"][data-theme][data-sky] #bossLiveName::before { content:"\2620\FE0E"; margin-right:6px; color:#efe4c8; }
+html[data-halloween="on"][data-theme][data-sky] #bossLiveHp { color:#e9dfc8 !important; }
+html[data-halloween="on"][data-theme][data-sky] .boss-live-track {
+  height:16px !important; border:1px solid #250f05 !important; outline:1px solid #a64f1c !important; border-radius:3px !important;
+  background:#0d0610 !important; box-shadow:inset 0 3px 0 #000a !important;
+}
+html[data-halloween="on"][data-theme][data-sky] .boss-live-track i {
+  background:
+    repeating-linear-gradient(90deg, transparent 0 14px, #2a0a0a88 14px 16px),
+    linear-gradient(#ffb070 0 22%, #e2452c 22% 70%, #8f1d1d 70%) !important;
+  box-shadow:inset 0 2px 0 #ffd1a3, 2px 0 6px #ff6a2a88 !important;
+}
+html[data-halloween="on"][data-theme][data-sky] #bossLiveDamage { color:#ffb347 !important; }
+
+/* ---------- boss card in the leaderboard: same copper plaque ---------- */
+html[data-halloween="on"][data-theme][data-sky] #lbBoss.boss-card {
+  border:1px solid #250f05 !important; border-radius:8px !important; padding:14px !important;
+  background:
+    radial-gradient(circle at 8px 8px, #fff0b8 0 .8px, #e3a043 1.4px, #6e3b0d 2.8px, transparent 3.2px),
+    radial-gradient(circle at calc(100% - 8px) 8px, #fff0b8 0 .8px, #e3a043 1.4px, #6e3b0d 2.8px, transparent 3.2px),
+    radial-gradient(circle at 8px calc(100% - 8px), #fff0b8 0 .8px, #e3a043 1.4px, #6e3b0d 2.8px, transparent 3.2px),
+    radial-gradient(circle at calc(100% - 8px) calc(100% - 8px), #fff0b8 0 .8px, #e3a043 1.4px, #6e3b0d 2.8px, transparent 3.2px),
+    linear-gradient(#1d1026f2, #120a18f2) !important;
+  box-shadow:inset 0 0 0 3px #a64f1c, inset 0 0 0 4px #f3ad6688, inset 0 0 0 5px #250f05, 0 3px 0 #0009 !important;
+  color:#e9dfc8 !important;
+}
+html[data-halloween="on"][data-theme][data-sky] #lbBoss .boss-art {
+  border:2px solid #250f05 !important; border-radius:6px;
+  background:radial-gradient(ellipse at 50% 65%, #ff7a1a40, #3a1f5e66 45%, #07050fe6 80%) !important;
+  box-shadow:inset 0 0 0 2px #a64f1c, inset 0 0 24px #000c, 0 2px 0 #0009;
+}
+html[data-halloween="on"][data-theme][data-sky] #lbBoss h3 { color:#ffb347 !important; text-shadow:0 2px 0 #000 !important; }
+html[data-halloween="on"][data-theme][data-sky] #lbBoss h3::before { content:"\2620\FE0E"; margin-right:8px; color:#efe4c8; }
+html[data-halloween="on"][data-theme][data-sky] #lbBoss progress {
+  height:16px !important; border:1px solid #250f05 !important; outline:1px solid #a64f1c; border-radius:3px;
+  background:#0d0610 !important; box-shadow:inset 0 3px 0 #000a;
+}
+html[data-halloween="on"][data-theme][data-sky] #lbBoss progress::-webkit-progress-bar { background:#0d0610 !important; }
+html[data-halloween="on"][data-theme][data-sky] #lbBoss progress::-webkit-progress-value {
+  background:repeating-linear-gradient(90deg, transparent 0 14px, #2a0a0a88 14px 16px), linear-gradient(#ffb070 0 22%, #e2452c 22% 70%, #8f1d1d 70%) !important;
+  box-shadow:inset 0 2px 0 #ffd1a3;
+}
+html[data-halloween="on"][data-theme][data-sky] #lbBoss progress::-moz-progress-bar { background:linear-gradient(#ffb070 0 22%, #e2452c 22% 70%, #8f1d1d 70%); }
+html[data-halloween="on"][data-theme][data-sky] #lbBoss #lbBossStatus { color:#ffb347 !important; }
+html[data-halloween="on"][data-theme][data-sky] #lbBoss .ghost {
+  border:1px solid #250f05 !important; border-radius:6px !important; color:#ffe8c2 !important;
+  background:linear-gradient(#d0732f, #a64f1c 55%, #773211) !important;
+  box-shadow:inset 0 1px 0 #f3ad66, inset 0 -1px 0 #4d1f08, 0 2px 0 #0009 !important; text-shadow:0 1px 0 #250f05 !important;
+}
+
+/* =====================================================================
+   Windows & menus: copper plaque system (same metal as balances / boss / day-night button)
+   ===================================================================== */
+html[data-halloween="on"][data-theme][data-sky] {
+  --game-panel:#1b1022; --game-inset:#120a18; --game-line:#a64f1c; --game-edge:#250f05;
+  --game-shadow:#07040a; --game-ink:#e9dfc8;
+  --surface-texture:linear-gradient(transparent, transparent);
+  --surface-panel:none;
+  --cu-rivet:#fff0b8 0 .8px, #e3a043 1.4px, #6e3b0d 2.8px, transparent 3.2px;
+  --cu-plate:
+    radial-gradient(circle at 8px 8px, var(--cu-rivet)),
+    radial-gradient(circle at calc(100% - 8px) 8px, var(--cu-rivet)),
+    radial-gradient(circle at 8px calc(100% - 8px), var(--cu-rivet)),
+    radial-gradient(circle at calc(100% - 8px) calc(100% - 8px), var(--cu-rivet)),
+    linear-gradient(#1d1026f5, #120a18f5);
+  --cu-frame:inset 0 0 0 2px #a64f1c, inset 0 0 0 3px #250f05cc, 0 2px 0 #0009;
+  --cu-metal:linear-gradient(#d0732f, #a64f1c 55%, #773211);
+  --cu-metal-shade:inset 0 1px 0 #f3ad66, inset 0 -1px 0 #4d1f08, 0 2px 0 #0009;
+}
+
+/* big panels: modal windows, menu cards, profile & leaderboard blocks, shop */
+html[data-halloween="on"][data-theme][data-sky] :is(.modal-card,.menu-card,.profile-head,.ref-card,.lb-me,.cx-setup,.cx-info>div,
+  .kostyan-quests-lead,.kostyan-quest-card,.tour-box,.gp-card,.coin-card,.boss-info) {
+  background:var(--cu-plate) !important; background-size:auto !important;
+  border:1px solid #250f05 !important; border-image:none !important; border-radius:8px !important;
+  box-shadow:var(--cu-frame) !important; color:#e9dfc8 !important;
+}
+/* rows & cells inside them: dark recess with a thin copper line */
+html[data-halloween="on"][data-theme][data-sky] :is(.lvl-row,.pstat,.prize-card,.lb-row,.hist-row,.gift-item,.gp-item,.dep-method,
+  .boss-prize,.lang-row,.weapon-card,.theme-card,.cx-cell,.adm-box,.lv-row,.up-preview,.gift-how,.gp-price,.weapon-menu,.copy-row,.dep-lock) {
+  background:linear-gradient(#170d1df2, #0f0814f2) !important; background-size:auto !important;
+  border:1px solid #250f05 !important; border-image:none !important; border-radius:6px !important;
+  box-shadow:inset 0 0 0 1px #a64f1c88, inset 0 2px 0 #0008, 0 1px 0 #f3ad6622 !important; color:#e9dfc8 !important;
+}
+html[data-halloween="on"][data-theme][data-sky] :is(.gift-item.picked,.gp-item.active,.lb-row.me,.weapon-card.active,.theme-card.active) {
+  box-shadow:inset 0 0 0 1px #ffb347, inset 0 2px 0 #0008, 0 0 8px #ff8a2a55 !important;
+}
+/* pictures sitting in cells */
+html[data-halloween="on"][data-theme][data-sky] :is(.prize-card .thumb,.gift-item img,.gp-item img,.menu-card .mc-medal) {
+  background:radial-gradient(ellipse at 50% 60%, #ff7a1a26, #07050f99 75%) !important;
+  border:1px solid #250f05 !important; border-radius:5px !important; box-shadow:inset 0 0 0 1px #a64f1c66 !important;
+}
+
+/* headings & text */
+html[data-halloween="on"][data-theme][data-sky] :is(.modal-card h2,.menu-card .mc-title,.view h1,.view .title,.coin-card h2,.gp-card h2) {
+  color:#ffb347 !important; text-shadow:0 2px 0 #000 !important;
+}
+html[data-halloween="on"][data-theme][data-sky] :is(.modal-card,.menu-card) :is(.muted,.mc-sub,small,p) { color:#cfc2a8; }
+html[data-halloween="on"][data-theme][data-sky] #view-menu .menu-card.menu-wide::before { background:linear-gradient(#ffb347,#a64f1c) !important; }
+
+/* secondary buttons: copper */
+html[data-halloween="on"][data-theme][data-sky] :is(.ghost,.view-back,.gp-back,.lang-btn,.cx-chip,.mode-btn,.gp-sort button,.tour-btn,
+  #prizeGrid .prize-card .wd-btn:not(:disabled)) {
+  background:var(--cu-metal) !important; color:#ffe8c2 !important;
+  border:1px solid #250f05 !important; border-image:none !important; border-radius:6px !important;
+  box-shadow:var(--cu-metal-shade) !important; text-shadow:0 1px 0 #250f05 !important;
+}
+html[data-halloween="on"][data-theme][data-sky] :is(.cx-chip.active,.gp-sort button.active,.mode-btn.active) {
+  background:linear-gradient(#ffb347, #e0701e) !important; color:#250f05 !important; text-shadow:none !important;
+}
+/* main buttons inside windows: bright orange with bevel */
+html[data-halloween="on"][data-theme][data-sky] :is(.modal-card,.view:not(#view-upgrade),.coin-card,.gp-card) :is(.cta,.promo-btn,.pbtn,.sell-all,#cxBtn,
+  #prizeGrid .prize-card .sell-btn) {
+  background:linear-gradient(#ffb347, #f0892a 55%, #c8601a) !important; color:#250f05 !important;
+  border:1px solid #250f05 !important; border-image:none !important; border-radius:6px !important;
+  box-shadow:inset 0 2px 0 #ffe0a0, inset 0 -3px 0 #9a4a16, 0 3px 0 #0009 !important; text-shadow:0 1px 0 #ffd27a88 !important;
+}
+html[data-halloween="on"][data-theme][data-sky] :is(.ghost,.cta,.view-back,.cx-chip,.lang-btn):active:not(:disabled) { transform:translateY(2px); }
+
+/* inputs */
+html[data-halloween="on"][data-theme][data-sky] :is(.modal-card,.view,.gp-card,.coin-card) :is(input:not([type=range]):not([type=checkbox]),select,textarea,.promo-input,.dep-wallet,.ref-link-box,.copy-row code) {
+  background:#0d0610 !important; color:#ffe8c2 !important;
+  border:1px solid #250f05 !important; border-radius:5px !important; box-shadow:inset 0 0 0 1px #a64f1c66, inset 0 2px 0 #000a !important;
+}
+/* level / progress bars */
+html[data-halloween="on"][data-theme][data-sky] :is(.lvl-bar,.ref-stat) {
+  background:#0d0610 !important; border:1px solid #250f05 !important; border-radius:4px !important; box-shadow:inset 0 0 0 1px #a64f1c66 !important;
+}
+/* modal backdrop: deep night tint instead of grey */
+html[data-halloween="on"][data-theme][data-sky] .modal { background:#07040ccc !important; }
+
+/* ---------- UP button: carved jack-o'-lantern ---------- */
+html[data-halloween="on"][data-theme][data-sky] #view-upgrade #spinBtn {
+  position:relative; overflow:visible !important; border-radius:16px 16px 14px 14px !important; border:1px solid #250f05 !important;
+  background:
+    radial-gradient(ellipse at 50% 55%, #ffcf5a55, transparent 60%),
+    repeating-linear-gradient(90deg, #0000 0 14px, #9a3f0a55 14px 16px, #0000 16px 20px),
+    linear-gradient(#ffad42, #f37d1e 50%, #c2520f) !important;
+  box-shadow:inset 0 3px 0 #ffd38a, inset 0 -4px 0 #8a3508, inset 0 0 0 1px #ffb85a66, 0 3px 0 #0009, 0 0 14px #ff8a2a55 !important;
+}
+/* stem */
+html[data-halloween="on"][data-theme][data-sky] #view-upgrade #spinBtn::before {
+  content:""; position:absolute; left:50%; top:-11px; width:12px; height:13px; margin-left:-6px; z-index:1;
+  background:linear-gradient(90deg, #3d6a1c, #6a9a30 45%, #2f5418); border:1px solid #250f05; border-bottom:0;
+  border-radius:4px 6px 0 0; transform:skewX(-10deg); pointer-events:none;
+}
+/* carved letters glowing from inside */
+html[data-halloween="on"][data-theme][data-sky] #view-upgrade #spinBtnText {
+  color:#ffe46a !important; -webkit-text-stroke:1px #4a1a04;
+  text-shadow:0 0 6px #ffb020, 0 0 14px #ff7a00, 0 2px 0 #4a1a04 !important;
+}
+html[data-halloween="on"][data-theme][data-sky] #view-upgrade #spinBtn:disabled #spinBtnText { color:#b9733a !important; text-shadow:0 2px 0 #4a1a04 !important; }
+html[data-halloween="on"][data-theme][data-sky] #view-upgrade #spinBtn:not(:disabled) #spinBtnText { animation:hwCandle 2.4s ease-in-out infinite; }
+@keyframes hwCandle { 0%,100% { opacity:1 } 40% { opacity:.86 } 55% { opacity:1 } 70% { opacity:.92 } }
+@media (prefers-reduced-motion: reduce) { #spinBtnText { animation:none !important } }
+html[data-halloween="on"][data-theme][data-sky] .halloween-badge {
+  background:var(--cu-metal) !important; color:#ffe8c2 !important; border:1px solid #250f05 !important; border-radius:6px !important;
+  box-shadow:var(--cu-metal-shade) !important; text-shadow:0 1px 0 #250f05 !important;
+}
+
+/* =====================================================================
+   Sprite UI from the mockup (static/halloween/ui/*.svg, tools/build_ui_sprites.py).
+   plate-*.svg are nine-slice frames: 1 sprite pixel = 2 CSS px. Loaded last, so it wins.
+   ===================================================================== */
+html[data-halloween="on"][data-theme][data-sky] {
+  --ui-dark:url("/static/halloween/ui/plate-dark.svg") 5 fill / 5px stretch;
+  --ui-brown:url("/static/halloween/ui/plate-brown.svg") 5 fill / 5px stretch;
+  --ui-orange:url("/static/halloween/ui/plate-orange.svg") 5 fill / 5px stretch;
+}
+/* balances */
+html[data-halloween="on"][data-theme][data-sky] .topbar :is(.coin-chip,.balance) {
+  border:5px solid transparent !important; border-image:var(--ui-dark) !important; border-radius:0 !important;
+  background:none !important; box-shadow:0 2px 0 #0008 !important; padding:0 4px !important; min-height:22px; gap:8px;
+  font-size:12px; color:#ffe8c2 !important;
+}
+html[data-halloween="on"][data-theme][data-sky] .topbar :is(#coinValue,#balanceValue) {
+  background:none !important; box-shadow:none !important; padding:0 2px !important; min-width:0; text-shadow:2px 2px 0 #000 !important;
+}
+html[data-halloween="on"][data-theme][data-sky] .topbar :is(.coin-ico,.ton-ico) { width:22px !important; height:22px !important; image-rendering:pixelated; filter:none !important; }
+html[data-halloween="on"][data-theme][data-sky] .topbar .bal-plus {
+  width:24px !important; height:24px !important; margin-left:2px; font-size:0 !important; color:transparent !important;
+  background:url("/static/halloween/ui/plus.svg") center / 100% 100% no-repeat !important; image-rendering:pixelated;
+  border:0 !important; box-shadow:none !important;
+}
+/* slider edge tags + track */
+html[data-halloween="on"][data-theme][data-sky] #view-upgrade .mode-edge {
+  border:5px solid transparent !important; border-image:var(--ui-dark) !important; border-radius:0 !important;
+  background:none !important; box-shadow:0 2px 0 #0008 !important; padding:0 2px !important; min-width:0; font-size:10px !important;
+}
+html[data-halloween="on"][data-theme][data-sky] #modeSlider::-webkit-slider-runnable-track {
+  height:16px; border:2px solid #1a0d07 !important; border-radius:2px !important;
+  background:linear-gradient(to right, #ffb04a 0, #f0891e var(--fill,50%), #1a1012 var(--fill,50%)) !important;
+  box-shadow:0 0 0 2px #8a4110, inset 0 2px 0 #fff4, inset 0 -3px 0 #0005 !important;
+}
+html[data-halloween="on"][data-theme][data-sky] #modeSlider::-webkit-slider-thumb {
+  width:16px; height:30px; margin-top:-9px; border:2px solid #1a0d07 !important; border-radius:2px !important;
+  background:linear-gradient(90deg, #ffe08a 0 30%, #f2b228 30% 75%, #c98a1a 75%) !important; box-shadow:0 2px 0 #0008 !important;
+}
+/* "own chance" plaque with a dark value field */
+html[data-halloween="on"][data-theme][data-sky] #view-upgrade .chance-custom {
+  border:5px solid transparent !important; border-image:var(--ui-brown) !important; border-radius:0 !important;
+  background:none !important; box-shadow:0 2px 0 #0008 !important; padding:0 4px !important;
+}
+html[data-halloween="on"][data-theme][data-sky] #view-upgrade .chance-custom input {
+  border:0 !important; border-image:none !important; border-radius:2px !important; height:28px !important; margin:0;
+  background:#140c0a !important; box-shadow:inset 0 2px 0 #000c, inset 0 -1px 0 #ffffff14 !important;
+  color:#ffe8c2 !important; text-align:center; font-size:14px !important;
+}
+/* side buttons: brown framed squares; UP: the pumpkin */
+html[data-halloween="on"][data-theme][data-sky] #view-upgrade :is(#weaponBtn,#fastBtn) {
+  width:66px !important; height:66px !important;
+  border:5px solid transparent !important; border-image:var(--ui-brown) !important; border-radius:0 !important;
+  background:none !important; box-shadow:0 3px 0 #0009 !important; color:#ffd23f !important;
+}
+html[data-halloween="on"][data-theme][data-sky] #view-upgrade #fastBtn[aria-pressed="true"] {
+  border-image:var(--ui-orange) !important; color:#2a1206 !important; box-shadow:0 0 12px #ff8a2a88, 0 3px 0 #0009 !important;
+}
+html[data-halloween="on"][data-theme][data-sky] #view-upgrade #fastBtn .ic-bolt { filter:drop-shadow(2px 2px 0 #1a0d07) !important; }
+html[data-halloween="on"][data-theme][data-sky] #view-upgrade #spinBtn {
+  width:94px !important; height:98px !important; border:0 !important; border-radius:0 !important;
+  background:url("/static/halloween/ui/pumpkin-btn.svg") center / 100% 100% no-repeat !important;
+  box-shadow:none !important; filter:drop-shadow(0 4px 0 #0009) drop-shadow(0 0 10px #ff8a2a55) !important; padding-top:12px !important;
+}
+html[data-halloween="on"][data-theme][data-sky] #view-upgrade #spinBtn::before { display:none !important; }
+html[data-halloween="on"][data-theme][data-sky] #view-upgrade #spinBtn:disabled { filter:grayscale(.45) brightness(.8) drop-shadow(0 4px 0 #0009) !important; }
+html[data-halloween="on"][data-theme][data-sky] #view-upgrade #spinBtnText {
+  font-size:30px !important; color:#ffd23f !important; -webkit-text-stroke:2px #3a1a04;
+  text-shadow:0 3px 0 #3a1a04, 0 0 10px #ffb02088 !important;
+}
+/* mockup proportions: wide balance plaques, tabs filling the plank */
+html[data-halloween="on"][data-theme][data-sky] .topbar :is(.coin-chip,.balance) { min-width:min(42vw, 230px); justify-content:flex-start; }
+html[data-halloween="on"][data-theme][data-sky] .topbar :is(#coinValue,#balanceValue) { flex:1; text-align:center !important; font-size:13px; }
+
+/* ---------- compact balances (sized for everyday sums, not admin test balances) ---------- */
+html[data-halloween="on"][data-theme][data-sky] .topbar :is(.coin-chip,.balance) {
+  min-width:0 !important; width:auto !important; max-width:46vw; justify-content:center !important;
+  min-height:0 !important; padding:1px 4px !important; gap:5px !important; font-size:12px !important;
+}
+html[data-halloween="on"][data-theme][data-sky] .topbar :is(.coin-ico,.ton-ico) { width:18px !important; height:18px !important; }
+html[data-halloween="on"][data-theme][data-sky] .topbar .bal-plus { width:18px !important; height:18px !important; }
+html[data-halloween="on"][data-theme][data-sky] .topbar :is(#coinValue,#balanceValue) { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+
+/* ---------- weapon icons: the tall skeleton hand fills the button / card height ---------- */
+html[data-halloween="on"][data-theme][data-sky] #view-upgrade #weaponBtn img {
+  width:44px !important; height:44px !important; max-width:none !important; max-height:none !important; object-fit:contain;
+}
+html[data-halloween="on"][data-theme][data-sky] #view-upgrade #weaponBtn img[src*="skeleton-hand"] { width:34px !important; height:52px !important; }
+html[data-halloween="on"][data-theme][data-sky] .weapon-card img[src*="skeleton-hand"] { height:54px !important; width:auto !important; max-height:none !important; max-width:none !important; }
+
+/* ---------- thinner frames everywhere: 3-4px outlines -> 2px, white "selected" ring -> thin copper ---------- */
+html[data-halloween="on"][data-theme][data-sky] :is(.mc-medal,.avatar,.ref-link-box,.kostyan-header,.shop-stage,.tour-spot,.tour-name,
+  .cz-tab,.wp-stage,.amt,.pixel-switch-track,.toast,.coin-viewport) { border-width:2px !important; }
+html[data-halloween="on"][data-theme][data-sky] .cz-tab { box-shadow:inset 1px 1px 0 #ffd06a, inset -1px -1px 0 #b94b06, 0 2px 0 #07040a !important; }
+html[data-halloween="on"][data-theme][data-sky] :is(.weapon-card,.theme-card,.gift-item,.gp-item).on {
+  outline:2px solid #ffb347 !important; outline-offset:-1px !important;
+}

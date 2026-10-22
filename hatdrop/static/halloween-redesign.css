@@ -1,0 +1,31 @@
+
+html[data-halloween="on"] {
+ --hw-ui-panel:#303037;--hw-ui-recess:#1e2026;--hw-ui-control:#3e4149;
+ --hw-ui-edge:#111218;--hw-ui-shine:#76717a;--hw-ui-text:#e8e0d3;--hw-ui-muted:#b3aaa6;--hw-ui-accent:#dbad76;
+}
+html[data-halloween="on"] :is(.menu-card,.profile-head,.lvl-row,.pstat,.ref-card,.prize-card,.lb-row,.lb-me,.hist-row,.cx-info>div,.cx-setup,.kostyan-quests-lead,.kostyan-quest-card,.modal-card,.tour-box) {
+ background-color:#24252b!important;
+ background-image:url('/static/ui/cobweb-corner.svg'),linear-gradient(130deg,#181b21c9,#24252bd9),url('/static/ui/halloween-granite.webp')!important;
+ background-size:70px 70px,100% 100%,230px 230px!important;
+ background-position:right top,center,center!important;
+ background-repeat:no-repeat,no-repeat,repeat!important;
+ border:3px solid #151419!important;border-radius:3px!important;
+ box-shadow:inset 0 0 0 1px #85756b,inset 3px 3px 0 #515158,inset -3px -3px 0 #121319,0 4px 0 #101015!important;
+ color:#e8e0d3;
+}
+html[data-halloween="on"] #view-menu .menu-card.menu-wide::before {background:linear-gradient(#b98b58,#63503c);width:5px!important;}
+html[data-halloween="on"] #view-menu .menu-card.menu-wide::after {background:none;}
+html[data-halloween="on"] .menu-card .mc-medal {background:radial-gradient(#474049,#191a20);border:2px solid #9c7a53;border-radius:4px;box-shadow:inset 0 0 0 3px #1a181d,0 3px #0a0a0e;}
+html[data-halloween="on"] #view-menu .menu-card .mc-title {color:#ead6b4;text-shadow:2px 2px #0b0b10;}
+html[data-halloween="on"] #view-menu .menu-card .mc-sub {color:#b9afaa;}
+html[data-halloween="on"] .prize-card .thumb {background:radial-gradient(ellipse at 50% 65%,#54463688,#17191fe6)!important;border-color:#696069;box-shadow:inset 0 0 0 2px #15161b;}
+html[data-halloween="on"] #prizeGrid .prize-card .wd-btn:not(:disabled) {background:linear-gradient(#59656c,#35444e)!important;color:#f4e8cd!important;border-color:#1a252c!important;box-shadow:inset 0 2px #8e9898,inset 0 -2px #23313a,0 2px #11151b!important;}
+html[data-halloween="on"] #prizeGrid .prize-card .sell-btn {background:linear-gradient(#b17743,#80502e)!important;color:#fff0d2!important;border:2px solid #472b1c!important;box-shadow:inset 0 2px #d8a772,inset 0 -2px #59351f,0 2px #1b1513!important;}
+html[data-halloween="on"] .prize-value {background:#13161de8;border-color:#8e7352;color:#f2c989;}
+html[data-halloween="on"] .tour-name {background:#27262c;border-color:#776254;color:#edc793;}
+html[data-halloween="on"] .tour-text {color:#e9dcc6;}
+html[data-halloween="on"] .tour-btn {background:#252329;border-color:#716459;color:#f4d9ae;}
+html[data-halloween="on"] #view-chests #cxGrid .cx-cell {background:linear-gradient(#383338,#191b22)!important;border:2px solid #655b58!important;box-shadow:inset 1px 1px #8b7864,0 2px #111219!important;}
+html[data-halloween="on"] #view-chests #cxGrid .cx-cell.empty.hit {border-color:#aa5c52!important;box-shadow:0 0 9px #922a2a88!important;}
+html[data-halloween="on"] #view-chests #cxGrid .cx-cell.gold {border-color:#b58c4f!important;}
+html[data-halloween="on"] #view-chests #cxGrid .cx-cell img {filter:drop-shadow(0 2px #101116);image-rendering:pixelated!important;}

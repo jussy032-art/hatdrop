@@ -1,0 +1,174 @@
+{
+  "title": "HatDrop Halloween recorded ambience",
+  "adaptation_license": "CC BY-SA 4.0",
+  "license_url": "https://creativecommons.org/licenses/by-sa/4.0/",
+  "modifications": "Cropped, cleaned, gently pitch/time adjusted, faded, reverberated, spatially mixed with long quiet pauses; no original synthesized vocal bed remains.",
+  "sources": [
+    {
+      "id": "crow",
+      "title": "Carrion Crow (Corvus corone), W1CDR0001425 BD18",
+      "author": "Lawrence Shove / The British Library Board",
+      "license": "CC BY-SA 4.0",
+      "license_url": "https://creativecommons.org/licenses/by-sa/4.0/",
+      "source": "https://commons.wikimedia.org/wiki/File:Carrion_Crow_(Corvus_corone)_(W1CDR0001425_BD18).ogg",
+      "url": "https://upload.wikimedia.org/wikipedia/commons/8/8a/Carrion_Crow_%28Corvus_corone%29_%28W1CDR0001425_BD18%29.ogg",
+      "bytes": 704542
+    },
+    {
+      "id": "cat",
+      "title": "Meow — Silas",
+      "author": "Dan Crosby (Dcrosby)",
+      "license": "CC BY-SA 3.0",
+      "license_url": "https://creativecommons.org/licenses/by-sa/3.0/",
+      "source": "https://commons.wikimedia.org/wiki/File:Meow.ogg",
+      "url": "https://upload.wikimedia.org/wikipedia/commons/6/62/Meow.ogg",
+      "bytes": 14306
+    },
+    {
+      "id": "witch",
+      "title": "Evil Laugh 2",
+      "author": "AntumDeluge",
+      "license": "CC0 1.0",
+      "license_url": "https://creativecommons.org/publicdomain/zero/1.0/",
+      "source": "https://opengameart.org/content/evil-laugh-2",
+      "url": "https://opengameart.org/sites/default/files/evil_laugh_02_0.ogg",
+      "bytes": 25779
+    },
+    {
+      "id": "ghost",
+      "title": "Ghostly Humming",
+      "author": "Nocturnal_Vanguard / AuraVoice",
+      "license": "CC0 1.0",
+      "license_url": "https://creativecommons.org/publicdomain/zero/1.0/",
+      "source": "https://opengameart.org/content/ghostly-humming",
+      "url": "https://opengameart.org/sites/default/files/ghostly_humming.ogg",
+      "bytes": 1388243
+    }
+  ],
+  "recording_schedule": {
+    "day": [
+      [
+        4,
+        "crow-a",
+        -0.65,
+        0.65
+      ],
+      [
+        19,
+        "cat-a",
+        0.45,
+        0.68
+      ],
+      [
+        38,
+        "witch-a",
+        -0.4,
+        0.43
+      ],
+      [
+        57,
+        "crow-b",
+        0.6,
+        0.54
+      ],
+      [
+        79,
+        "ghost-a",
+        -0.3,
+        0.34
+      ],
+      [
+        99,
+        "cat-b",
+        -0.55,
+        0.51
+      ],
+      [
+        123,
+        "crow-a",
+        0.2,
+        0.48
+      ],
+      [
+        147,
+        "witch-b",
+        0.55,
+        0.37
+      ],
+      [
+        168,
+        "ghost-b",
+        -0.6,
+        0.32
+      ]
+    ],
+    "night": [
+      [
+        7,
+        "ghost-b",
+        -0.55,
+        0.48
+      ],
+      [
+        26,
+        "crow-b",
+        0.6,
+        0.52
+      ],
+      [
+        47,
+        "witch-b",
+        -0.35,
+        0.5
+      ],
+      [
+        69,
+        "cat-b",
+        0.5,
+        0.62
+      ],
+      [
+        91,
+        "ghost-a",
+        0.4,
+        0.44
+      ],
+      [
+        116,
+        "crow-a",
+        -0.65,
+        0.48
+      ],
+      [
+        139,
+        "witch-a",
+        0.55,
+        0.43
+      ],
+      [
+        161,
+        "cat-a",
+        -0.4,
+        0.57
+      ],
+      [
+        179,
+        "ghost-b",
+        0.2,
+        0.36
+      ]
+    ]
+  },
+  "files": [
+    "halloween-recorded-crow-a",
+    "halloween-recorded-crow-b",
+    "halloween-recorded-cat-a",
+    "halloween-recorded-cat-b",
+    "halloween-recorded-witch-a",
+    "halloween-recorded-witch-b",
+    "halloween-recorded-ghost-a",
+    "halloween-recorded-ghost-b",
+    "halloween-day-ambience",
+    "halloween-night-ambience"
+  ]
+}

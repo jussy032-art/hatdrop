@@ -1,0 +1,15 @@
+<section id="admAI" hidden>
+ <article class="panel ai-credentials">
+  <form id="aiKeyForm" class="ai-key-form"><label>Ключ TokenWave<input id="aiKey" type="password" autocomplete="off" spellcheck="false" placeholder="Вставьте ключ" maxlength="512" aria-label="Ключ TokenWave"></label><button id="aiSaveKey" type="submit" class="primary">Сохранить ключ</button><button id="aiClearKey" type="button">Удалить ключ</button><button id="aiReload" type="button">Обновить</button></form>
+  <p id="aiKeyState" class="ai-key-state">Ключ ещё не добавлен</p>
+ </article>
+ <div id="aiNotice" class="ai-notice" role="status" hidden></div>
+ <div class="ai-metrics"><div class="ai-metric"><small>Осталось токенов</small><b id="aiRemaining">—</b></div><div class="ai-metric"><small>Потрачено токенов</small><b id="aiUsed">—</b></div><div class="ai-metric"><small>Запросов по ключу</small><b id="aiRequests">—</b></div></div>
+ <div class="ai-layout">
+  <aside class="panel ai-sidebar"><button id="aiNewChat" type="button">＋ Новый чат</button><div id="aiConversations" class="ai-conversations"></div></aside>
+  <article class="panel ai-chat"><div class="ai-chat-head"><h2 id="aiChatTitle">AI-ассистент</h2></div><div id="aiMessages" class="ai-messages" role="log" aria-live="polite"></div>
+   <form id="aiPromptForm" class="ai-compose"><div class="ai-controls"><label>Режим<select id="aiMode"><option value="chat">AI-ассистент</option><option value="post">Пост</option><option value="image">Изображение</option></select></label><label>Модель<select id="aiModel" aria-label="Модель AI"></select></label><label id="aiQualityLabel" hidden>Качество<select id="aiQuality"></select></label></div><p id="aiTariff" class="ai-tariff"></p><textarea id="aiPrompt" maxlength="12000" required placeholder="Задайте вопрос или опишите задачу…" aria-label="Запрос AI"></textarea><div class="ai-compose-footer"><small>Ctrl + Enter — отправить</small><button id="aiSend" type="submit" class="primary" disabled>Отправить</button></div></form>
+  </article>
+ </div>
+ <article class="panel ai-history"><div class="panel-heading"><h2>История списаний</h2><a href="https://tokenwave.ru/stats" target="_blank" rel="noopener">Кабинет TokenWave ↗</a></div><p>Расход по ключу, включая запросы из других программ.</p><div class="table-wrap"><table><thead><tr><th>Время</th><th>Модель</th><th>Вход</th><th>Выход</th><th>Списано токенов</th></tr></thead><tbody id="aiUsageRows"></tbody></table></div></article>
+</section>

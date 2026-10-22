@@ -1,0 +1,118 @@
+/* NIGHTFALL — one local design system for the player application.
+   Typography: Monocraft 400 / 700 / 900. Materials: night stone, copper, amber.
+   Semantic colors: amber = action, bone = text, muted stone = inactive, ember = damage. */
+html[data-theme][data-sky][data-halloween="on"] {
+ --game-font:"Monocraft",monospace;--pixel-font:"Monocraft",monospace;
+ --night-panel:#1b1524;--night-inset:#100f1a;--night-line:#a87343;--night-edge:#271920;
+ --night-text:#f2e2c7;--night-muted:#bfaeb4;--night-gold:#ffd18a;
+ --game-panel:var(--night-panel);--game-inset:var(--night-inset);--game-line:var(--night-line);
+ --game-edge:var(--night-edge);--game-ink:var(--night-text);--game-shadow:#080b14;
+ --game-accent:#ef9c31;--game-accent-light:#ffdc8d;--game-accent-dark:#9a5028;
+ --card:var(--night-panel);--card-line:var(--night-line);--text:var(--night-text);--muted:var(--night-muted);--gold:var(--night-gold);
+ --hw-ui-panel:var(--night-panel);--hw-ui-edge:var(--night-line);--hw-ui-accent:var(--night-gold);--hw-ui-text:var(--night-text);--hw-ui-muted:var(--night-muted);
+ --kq-a:#2b1e31;--kq-b:#17121f;--kq-edge:#986639;--kq-title:#ffd18a;--kq-chip-bg:#110f1b;--kq-chip-edge:#654533;
+}
+html[data-theme][data-sky][data-halloween="on"] :is(body,button,input,select,textarea,h1,h2,h3,h4,p,small,label,summary,li,.pname,.pwallet,.mc-title,.mc-sub,.title,.subtitle,.ref-title,.lvl-note,.shop-price,.pstat,.balance,.coin-chip) {
+ font-family:var(--game-font)!important;font-synthesis:none;font-variant-ligatures:none;letter-spacing:0;
+}
+html[data-theme][data-sky][data-halloween="on"] .content { text-shadow:none!important; padding-inline:14px; }
+html[data-theme][data-sky][data-halloween="on"] .view { gap:0; }
+html[data-theme][data-sky][data-halloween="on"] :is(.title,.pb-modal h2) { font-size:24px!important;line-height:1.4;font-weight:700!important;color:var(--night-gold);text-shadow:0 2px #100c18!important;margin-block:10px 18px; }
+html[data-theme][data-sky][data-halloween="on"] :is(.subtitle,.pwallet,.lvl-note,.shop-modal-desc,.kostyan-quest-info p,.kostyan-quests-lead p,.kostyan-quest-note,.stake-empty,.stake-summary p) { font-size:12px!important;line-height:1.7;color:var(--night-muted); }
+html[data-theme][data-sky][data-halloween="on"] :is(.profile-head,.lvl-row,.pstat,.ref-card,.prize-card,.hist-row,.lb-row,.lb-me,.pcard,.cx-info>div,.cx-setup,.kostyan-quest-card,.kostyan-quests-lead,.kostyan-state,.modal-card,.tour-box,.weapon-card,.theme-card,.shop-card,.stat-card,.shop-package,.stake-summary,.stake-shell,.boss-card) {
+ border:2px solid var(--night-line)!important;border-radius:5px!important;color:var(--night-text);
+ background:radial-gradient(ellipse at 50% 0,#63394624,transparent 75%),linear-gradient(#211928,#16121f)!important;
+ box-shadow:inset 0 0 0 2px #332332,inset 0 0 0 3px #ffda9b0d,0 3px 0 #080b14!important;
+}
+html[data-theme][data-sky][data-halloween="on"] :is(.modal-card,.tour-box) { padding:20px; }
+html[data-theme][data-sky][data-halloween="on"] .modal { background:#080b16b8;backdrop-filter:blur(3px); }
+html[data-theme][data-sky][data-halloween="on"] .modal-card { max-width:min(420px,calc(100vw - 24px)); }
+html[data-theme][data-sky][data-halloween="on"] .modal-card :is(p,li) { font-size:14px!important;line-height:1.7; }
+html[data-theme][data-sky][data-halloween="on"] .modal-card h2 { font-size:20px!important;line-height:1.5;color:var(--night-gold);font-weight:700; }
+html[data-theme][data-sky][data-halloween="on"] :is(#historyBtn,#promoBtn,.cta,.pbtn,.promo-btn,.kostyan-quest-action,.tour-btn,.theme-buy,.theme-apply,.wp-apply,.dep-wallet-btn,.view-back,.ref-copy) {
+ min-height:44px;padding:11px 14px;border:2px solid #382019!important;border-radius:4px!important;
+ color:#2d190e!important;background:linear-gradient(#ffd486 0 8%,#ee9d35 8% 77%,#a65c29 77%)!important;
+ box-shadow:inset 0 0 0 1px #ffdf9c,inset 0 3px #fff2bd66,inset 0 -2px #774023,0 3px #080b13!important;
+ font:900 14px/1.5 var(--game-font)!important;text-shadow:0 1px #ffe6b36b!important;
+ transition:filter .15s,translate .12s;cursor:pointer;
+}
+html[data-theme][data-sky][data-halloween="on"] :is(#refToggle,.ghost,.lang-btn,.cx-chip,.kq-tab,.cz-tab,.amt,.ref-head) {
+ border:1px solid #91623c!important;border-radius:4px!important;background:linear-gradient(#322333,#1e1726)!important;
+ color:#ecd2a5!important;box-shadow:inset 0 1px #cf975c26,0 2px #0a0c14!important;
+ font:700 12px/1.5 var(--game-font)!important;text-shadow:none!important;min-height:40px;
+}
+html[data-theme][data-sky][data-halloween="on"] :is(.kq-tab.on,.cz-tab.active,.cx-chip.on,.lang-btn.on) { background:#77502c!important;border-color:#dfac61!important;color:#ffe5ab!important; }
+html[data-theme][data-sky][data-halloween="on"] :is(.cta,.pbtn,.promo-btn,.kostyan-quest-action,.tour-btn,.theme-buy,.theme-apply,.wp-apply,.ghost):disabled { background:linear-gradient(#51474b,#37303a)!important;color:#ada0a0!important;border-color:#5c4c46!important;box-shadow:inset 0 1px #c1b09f33,0 2px #0b0d16!important;opacity:.65;cursor:default; }
+html[data-theme][data-sky][data-halloween="on"] :is(.cta,.pbtn,.promo-btn,.kostyan-quest-action,.tour-btn,.ghost):active:not(:disabled) { translate:0 2px;transform:none; }
+html[data-theme][data-sky][data-halloween="on"] :is(button,input,select,[role="button"]):focus-visible { outline:2px solid #ffe4aa!important;outline-offset:3px; }
+html[data-theme][data-sky][data-halloween="on"] :is(input:not([type="range"]):not([type="checkbox"]),select,textarea,.promo-input,.ref-link-box) {
+ border:1px solid #805b40!important;border-radius:3px!important;background:#100f1a!important;color:#f3dfbb!important;box-shadow:inset 0 2px #060911!important;font-size:14px;line-height:1.5;
+}
+html[data-theme][data-sky][data-halloween="on"] :is(.balance,.coin-chip) { background:linear-gradient(#34252d,#191520)!important;border:2px solid #ce954d!important;box-shadow:inset 0 0 0 2px #4a302c,0 3px #070b15!important;border-radius:3px!important;font-weight:700;font-size:18px; }
+html[data-theme][data-sky][data-halloween="on"] .pname { font-size:17px;line-height:1.5;color:#ffe1a4;font-weight:700; }
+html[data-theme][data-sky][data-halloween="on"] .profile-head { padding:14px;gap:12px; }
+html[data-theme][data-sky][data-halloween="on"] .avatar { background:#100f1a!important;border:1px solid #8c613e!important;border-radius:4px!important;color:#f8ce83; }
+html[data-theme][data-sky][data-halloween="on"] :is(.lvl-badge,.ref-chevron) { background:#b67a37!important;border:1px solid #e6b575!important;color:#201523!important;font:700 12px/1.5 var(--game-font); }
+html[data-theme][data-sky][data-halloween="on"] .pstats { gap:8px; }
+html[data-theme][data-sky][data-halloween="on"] .pstat { padding:12px 4px;gap:7px; }
+html[data-theme][data-sky][data-halloween="on"] .pstat :is(small,span) { font-size:11px;line-height:1.5;color:var(--night-muted); }
+html[data-theme][data-sky][data-halloween="on"] .pstat b { font:700 13px/1.5 var(--game-font);color:#ffda95; }
+html[data-theme][data-sky][data-halloween="on"] :is(.ref-title,.shop-card,.kostyan-quest-info h3,.stake-summary small,.profile-actions button) { font-size:14px!important;line-height:1.5; }
+html[data-theme][data-sky][data-halloween="on"] :is(.shop-price,.kq-reward,.kostyan-quest-reward,.kostyan-progress-count,.ref-stat,.ref-code,.ref-note) { font-size:12px!important;line-height:1.5; }
+html[data-theme][data-sky][data-halloween="on"] :is(.lvl-bar,.kostyan-progress,.boss-live-track) { border:1px solid #91633f;background:#100f1a;box-shadow:inset 0 2px #070a12;border-radius:2px; }
+html[data-theme][data-sky][data-halloween="on"] :is(.lvl-fill,.kostyan-progress>span) { background:linear-gradient(#ffe3a0,#e79b3e 65%,#955025)!important; }
+html[data-theme][data-sky][data-halloween="on"] .tabbar .tab { border-radius:4px!important;background:linear-gradient(#35202a,#20141d)!important;border:2px solid #140e16!important;color:#d9c8ae!important;box-shadow:inset 0 1px #80513a,0 3px #070b13!important; }
+html[data-theme][data-sky][data-halloween="on"] .tabbar .tab.active { background:linear-gradient(#ffcd76,#eda035 70%,#ae6129)!important;color:#291b12!important;box-shadow:inset 0 0 0 1px #ffe2a3,0 3px #070b13!important; }
+html[data-theme][data-sky][data-halloween="on"] :is(#weaponBtn,#fastBtn,#skyBtn) { border-radius:4px!important;border:2px solid #9b683d!important;background-color:#2a1b25!important;box-shadow:inset 0 1px #d29b5544,0 3px #090c15!important; }
+html[data-theme][data-sky][data-halloween="on"] #spinBtn { border-radius:16px!important;border:3px solid #382019!important;background-color:#f2a137!important;box-shadow:inset 0 2px #ffe5a1,0 5px #130e17!important; }
+html[data-theme][data-sky][data-halloween="on"] #chanceInput { font-size:15px!important; }
+html[data-theme][data-sky][data-halloween="on"] .pb-modal .pb-scene {
+ height:240px;border:1px solid #91633f;border-radius:3px;background:#101421 url('/static/menu-map/boss-arena.svg') center/cover!important;box-shadow:inset 0 0 35px #070b17;
+}
+html[data-theme][data-sky][data-halloween="on"] .pb-modal .pb-scene::before { display:none; }
+html[data-theme][data-sky][data-halloween="on"] .pb-modal .pb-scene::after { height:19%;background:linear-gradient(#856048 0 2px,#342637 2px 7px,#151421 7px); }
+html[data-theme][data-sky][data-halloween="on"] .pb-modal .pb-scene .pb-big { width:144px;height:190px;margin-left:-72px;bottom:calc(19% - 8px); }
+html[data-theme][data-sky][data-halloween="on"] .pb-modal .pb-moon { display:none; }
+html[data-theme][data-sky][data-halloween="on"] .pb-modal .pb-rules { border:1px solid #6a4935;box-shadow:none;border-radius:3px;background:#100f1a; }
+html[data-theme][data-sky][data-halloween="on"] #pbHud { width:100%;margin:10px auto 12px;height:108px; }
+html[data-theme][data-sky][data-halloween="on"] #pbHud .pb-row { top:8px; }
+html[data-theme][data-sky][data-halloween="on"] #pbHud .pb-body { top:1px; }
+html[data-theme][data-sky][data-halloween="on"] #pbHud .pb-reward { bottom:8px; }
+html[data-theme][data-sky][data-halloween="on"] .pb-kicker { display:block;font:700 10px/1.5 var(--game-font);letter-spacing:1px;color:#bd9570;margin-bottom:-5px; }
+html[data-theme][data-sky][data-halloween="on"] .design-example-label{font:400 11px/1.5 var(--game-font);color:var(--night-muted);margin:14px 0 8px;text-align:center}
+html[data-theme][data-sky][data-halloween="on"] .design-quest-example{width:100%;padding:14px}
+body[data-design-quests] #questLoading{display:none!important}
+@media(hover:hover) { html[data-theme][data-sky][data-halloween="on"] :is(.cta,.pbtn,.promo-btn,.kostyan-quest-action,.ghost):hover:not(:disabled){filter:brightness(1.12)} }
+@media(max-width:380px) { html[data-theme][data-sky][data-halloween="on"] .pstat b{font-size:11px}html[data-theme][data-sky][data-halloween="on"] .pstat :is(small,span){font-size:10px}html[data-theme][data-sky][data-halloween="on"] .profile-head{padding:11px;gap:8px}html[data-theme][data-sky][data-halloween="on"] .pb-modal .pb-scene .pb-big{width:124px;height:163px;margin-left:-62px} }
+@media(prefers-reduced-motion:reduce) { html[data-theme][data-sky][data-halloween="on"] :is(button,.modal){transition:none;backdrop-filter:none} }
+
+/* Brighter candlelight edition: amber edges and richer violet stone. */
+html[data-theme][data-sky][data-halloween="on"] {
+ --night-panel:#2a1937;--night-line:#d79a48;--night-text:#fff0d5;
+ --night-muted:#d5c2ce;--night-gold:#ffdc85;--game-accent:#ffad32;
+ --game-accent-light:#ffe7a6;--game-accent-dark:#bb5b1d;
+}
+html[data-theme][data-sky][data-halloween="on"] :is(.profile-head,.lvl-row,.pstat,.ref-card,.prize-card,.hist-row,.lb-row,.lb-me,.pcard,.cx-info>div,.cx-setup,.kostyan-quest-card,.kostyan-quests-lead,.kostyan-state,.modal-card,.tour-box,.weapon-card,.theme-card,.shop-card,.stat-card,.shop-package,.stake-summary,.stake-shell,.boss-card) {
+ background:radial-gradient(ellipse at 50% 0,#a75a6238,transparent 75%),linear-gradient(#302039,#201529)!important;
+ box-shadow:inset 0 0 0 2px #563047,inset 0 0 0 3px #ffd78b26,0 3px #080b14,0 0 18px #ef9e2e0d!important;
+}
+html[data-theme][data-sky][data-halloween="on"] :is(#historyBtn,#promoBtn,.cta,.pbtn,.promo-btn,.kostyan-quest-action,.tour-btn,.theme-buy,.theme-apply,.wp-apply,.dep-wallet-btn,.view-back,.ref-copy) {
+ background:linear-gradient(#ffe9a9 0 8%,#ffb637 8% 48%,#f89920 48% 78%,#c56b24 78%)!important;
+ box-shadow:inset 0 0 0 1px #fff0b8,inset 0 3px #fff5d488,inset 0 -2px #925021,0 3px #080b13,0 0 12px #ffa82d26!important;
+}
+html[data-theme][data-sky][data-halloween="on"] #view-menu .menu-card.menu-wide:not(.section-soon) {
+ border-color:#dca04f!important;
+ background:radial-gradient(ellipse at 50% 35%,#9e59495c,transparent 74%),linear-gradient(#32213e,#201729)!important;
+ box-shadow:inset 0 0 0 3px #573246,inset 0 0 0 4px #ffd9902e,0 4px #0a0e18,0 0 18px #ffb13a1a!important;
+}
+html[data-theme][data-sky][data-halloween="on"] #view-menu .menu-card .mc-art { filter:brightness(1.12) saturate(1.18) drop-shadow(0 3px #06080e) drop-shadow(0 0 10px #f7ad4a66); }
+html[data-theme][data-sky][data-halloween="on"] #view-menu .mc-title { color:#ffdc85; }
+html[data-theme][data-sky][data-halloween="on"] #view-menu .map-location { color:#cfb294; }
+html[data-theme][data-sky][data-halloween="on"] #view-menu .mc-sub { color:#e3cfd3; }
+html[data-theme][data-sky][data-halloween="on"] #view-menu .map-seal { color:#e5bd87;border-color:#ab7947;background:#291b2a; }
+html[data-theme][data-sky][data-halloween="on"] .pb-modal .pb-scene .pb-big { filter:brightness(1.12) saturate(1.18) drop-shadow(0 4px #08091288) drop-shadow(0 0 12px #ffae4c55); }
+html[data-theme][data-sky][data-halloween="on"] .pb-modal .pb-scene { box-shadow:inset 0 0 25px #f3a64714,0 0 18px #ffab3322;border-color:#d69a4e; }
+html[data-theme][data-sky][data-halloween="on"] .pb-modal .pb-award { border-color:#dba24f;background:radial-gradient(ellipse at 50% 28%,#b56b3f66,transparent 80%),#2e1b35; }
+html[data-theme][data-sky][data-halloween="on"] :is(#historyBtn,#promoBtn,.cta,.pbtn,.promo-btn,.kostyan-quest-action,.tour-btn,.theme-buy,.theme-apply,.wp-apply,.dep-wallet-btn,.view-back,.ref-copy):disabled {
+ background:linear-gradient(#675358,#443640)!important;color:#bbadb2!important;border-color:#7a5d50!important;box-shadow:inset 0 1px #d3b28b44,0 2px #0b0d16!important;opacity:.65;
+}

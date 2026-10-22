@@ -1,0 +1,14 @@
+
+html[data-theme] #view-menu .menu-grid{display:grid!important;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px}
+html[data-theme] #view-menu .menu-card.menu-wide{flex-direction:column;text-align:center;justify-content:flex-start;gap:12px;padding:18px 8px 14px;min-width:0;min-height:190px}
+html[data-theme] #view-menu .menu-card .mc-medal{margin:0;width:64px;height:64px;flex:none}
+html[data-theme] #view-menu .menu-card .mc-art{width:54px;height:54px}
+html[data-theme] #view-menu .menu-card .mc-text{flex:none;width:100%;align-items:center;gap:10px}
+html[data-theme] #view-menu .menu-card .mc-title{font-size:clamp(11px,3.1vw,18px);line-height:1.5;letter-spacing:0;overflow-wrap:anywhere}
+html[data-theme] #view-menu .menu-card .mc-sub{font-size:7px;line-height:1.8;max-width:22em}
+html[data-theme] #view-menu .menu-card .mc-chev{display:none}
+html[data-theme] #view-menu .menu-card.section-soon{filter:grayscale(1);opacity:.72;cursor:default;transform:none;--mc:#b3b3a6}
+.section-status{position:relative;z-index:1;font-size:8px;line-height:1.6;padding:4px 8px;border:1px solid currentColor;color:#eee7d6}
+.section-status[hidden]{display:none}
+html[data-theme] .tab.section-soon{filter:grayscale(1);opacity:.5;cursor:default}
+@media(max-width:350px){html[data-theme] #view-menu .menu-card.menu-wide{padding-inline:5px}}

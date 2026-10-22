@@ -1,0 +1,118 @@
+/* Halloween "Coffins" mode. Art: static/chests/coffin/*.svg (tools/build_coffins.py).
+   Each cell = base layer (what is inside) + lid layer that slides off when opened. */
+
+html[data-halloween="on"] #view-chests .cx-grid { max-width:360px; gap:8px; }
+
+/* cell: dark grave niche with a thin copper line */
+html[data-halloween="on"] #view-chests #cxGrid .cx-cell.cx-coffin {
+  position:relative; overflow:visible; padding:2px !important; isolation:isolate;
+  background:radial-gradient(ellipse at 50% 80%, #2a1830 0%, #140a18 70%) !important;
+  border:1px solid #250f05 !important; border-radius:7px !important;
+  box-shadow:inset 0 0 0 1px #a64f1c88, inset 0 3px 0 #0009, 0 2px 0 #0008 !important;
+  transition:box-shadow .2s ease, transform .15s ease !important;
+}
+/* ground shadow under the coffin */
+html[data-halloween="on"] #view-chests #cxGrid .cx-cell.cx-coffin::before {
+  content:""; position:absolute; left:22%; right:22%; bottom:4%; height:9%; z-index:0; pointer-events:none;
+  background:radial-gradient(ellipse, #000a, transparent 70%);
+}
+html[data-halloween="on"] #view-chests #cxGrid .cx-cell.cx-coffin > img,
+html[data-halloween="on"] #view-chests #cxGrid .cx-cell.cx-coffin .cx-coffin-lid img {
+  position:relative; z-index:1; width:100% !important; height:100% !important; object-fit:contain;
+  image-rendering:auto !important; filter:none !important; animation:none !important; transform:none !important;
+}
+html[data-halloween="on"] #view-chests #cxGrid .cx-cell.cx-coffin .cx-coffin-lid {
+  position:absolute; inset:2px; z-index:2; display:block; pointer-events:none;
+  transform-origin:50% 60%; filter:drop-shadow(1px 3px 0 #0009);
+}
+html[data-halloween="on"] #view-chests #cxGrid .cx-cell.cx-coffin .cx-coffin-lid img { position:absolute; inset:0; }
+
+/* live round: coffins invite a click */
+html[data-halloween="on"] #view-chests #cxGrid.live .cx-cell.cx-coffin:not(:disabled) { cursor:pointer; }
+@media (hover:hover) {
+  html[data-halloween="on"] #view-chests #cxGrid.live .cx-cell.cx-coffin:not(:disabled):hover {
+    transform:translateY(-2px) !important; box-shadow:inset 0 0 0 1px #ffb347, inset 0 3px 0 #0009, 0 4px 8px #ff8a2a44 !important;
+  }
+  html[data-halloween="on"] #view-chests #cxGrid.live .cx-cell.cx-coffin:not(:disabled):hover .cx-coffin-lid { animation:cxLidPeek .6s ease-in-out; }
+}
+/* waiting for the server: the lid rattles */
+html[data-halloween="on"] #view-chests #cxGrid .cx-cell.cx-coffin.pending .cx-coffin-lid { animation:cxLidRattle .32s linear infinite; }
+
+/* candy found: warm glow from inside */
+html[data-halloween="on"] #view-chests #cxGrid .cx-cell.cx-coffin.gold {
+  background:radial-gradient(ellipse at 50% 55%, #ff9a2e66 0%, #3a1f12 55%, #140a18 85%) !important;
+  box-shadow:inset 0 0 0 1px #ffb347, inset 0 3px 0 #0009, 0 0 12px #ff8a2a66 !important; z-index:3;
+}
+/* skeleton: red glow and a jolt */
+html[data-halloween="on"] #view-chests #cxGrid .cx-cell.cx-coffin.empty {
+  background:radial-gradient(ellipse at 50% 45%, #a01e1e55 0%, #2a0d14 60%, #140a18 90%) !important;
+  box-shadow:inset 0 0 0 1px #c0392b, inset 0 3px 0 #0009 !important;
+}
+html[data-halloween="on"] #view-chests #cxGrid .cx-cell.cx-coffin.empty.hit {
+  z-index:3; box-shadow:inset 0 0 0 2px #ff4a3a, 0 0 16px #ff2a1aaa !important; animation:cxJolt .45s ease-out;
+}
+/* end of round: the rest is shown dimmed */
+html[data-halloween="on"] #view-chests #cxGrid .cx-cell.cx-coffin.cx-revealed { opacity:.6; filter:saturate(.7) !important; }
+
+@keyframes cxLidPeek { 0%,100% { transform:none } 35% { transform:translate(-3%,-2%) rotate(-3deg) } 65% { transform:translate(2%,-1%) rotate(2deg) } }
+@keyframes cxLidRattle { 0%,100% { transform:translate(0,0) rotate(0) } 25% { transform:translate(-2%,-1%) rotate(-2deg) } 75% { transform:translate(2%,-1%) rotate(2deg) } }
+@keyframes cxJolt { 0%,100% { transform:none } 20% { transform:translateX(-4px) rotate(-2deg) } 40% { transform:translateX(4px) rotate(2deg) } 60% { transform:translateX(-2px) } 80% { transform:translateX(2px) } }
+html[data-optimized="on"] #view-chests #cxGrid .cx-cell.cx-coffin,
+html[data-optimized="on"] #view-chests #cxGrid .cx-cell.cx-coffin .cx-coffin-lid { animation:none !important; }
+@media (prefers-reduced-motion:reduce) {
+  #view-chests #cxGrid .cx-cell.cx-coffin, #view-chests #cxGrid .cx-cell.cx-coffin .cx-coffin-lid { animation:none !important; transition:none !important; }
+}
+
+/* candies thrown out of an opened coffin (spawned by the game) */
+#cxGrid .cx-cell .cx-candy-particle{position:absolute;left:56%;top:47%;width:7px;height:4px;background:var(--candy-color);border:1px solid #3c2636;box-shadow:inset 0 1px #ffe3b5;z-index:4;pointer-events:none;transform-origin:center}
+.cx-candy-particle::before,.cx-candy-particle::after{content:"";position:absolute;top:0;width:2px;height:3px;background:var(--candy-color)}.cx-candy-particle::before{left:-3px}.cx-candy-particle::after{right:-3px}
+
+/* setup panel: skeleton-count chips and bet field in the copper style */
+html[data-halloween="on"] #view-chests .cx-row { gap:6px; }
+html[data-halloween="on"] #view-chests .cx-info > div b { color:#ffb347 !important; text-shadow:0 2px 0 #000; }
+html[data-halloween="on"] #view-chests .shell-hint.win { color:#ffcf5a !important; text-shadow:0 0 8px #ff8a2a88 !important; }
+html[data-halloween="on"] #view-chests .shell-hint.lose { color:#ff6a5a !important; text-shadow:0 0 8px #ff2a1a88 !important; }
+html[data-halloween="on"][data-theme][data-sky] #view-chests #cxEmpties .cx-chip.on {
+  background:linear-gradient(#ffb347, #e0701e) !important; color:#250f05 !important; text-shadow:none !important;
+  box-shadow:inset 0 1px 0 #ffe0a0, inset 0 -1px 0 #9a4a16, 0 0 8px #ff8a2a66 !important;
+}
+html[data-halloween="on"][data-theme][data-sky] .cx-win-sum {
+  background:linear-gradient(#170d1df2, #0f0814f2) !important; border:1px solid #250f05 !important; border-radius:6px !important;
+  box-shadow:inset 0 0 0 1px #a64f1c88, inset 0 2px 0 #0008 !important; color:#e9dfc8 !important;
+}
+html[data-halloween="on"][data-theme][data-sky] .cx-win-sum b { color:#ffcf5a !important; text-shadow:0 0 8px #ff8a2a66 !important; }
+
+/* ---------- compact layout: the whole mode fits one phone screen ---------- */
+html[data-halloween="on"] #view-chests { gap:8px; }
+html[data-halloween="on"] #view-chests .cx-grid {
+  width:min(300px, 84vw, 36vh) !important; max-width:none !important; gap:5px !important; margin:2px auto !important;
+}
+html[data-halloween="on"] #view-chests #cxGrid .cx-cell.cx-coffin { overflow:hidden !important; padding:3px 5px !important; }
+html[data-halloween="on"] #view-chests #cxGrid .cx-cell.cx-coffin .cx-coffin-lid { inset:3px 5px !important; }
+
+/* ---------- setup panel: one copper plaque, bet row + skeleton picker ---------- */
+html[data-halloween="on"][data-theme][data-sky] #view-chests .cx-setup {
+  width:min(340px, 92vw) !important; margin:0 auto; padding:10px 12px 11px !important; box-sizing:border-box;
+  display:flex; flex-direction:column; gap:7px;
+}
+html[data-halloween="on"][data-theme][data-sky] #view-chests .cx-bet {
+  display:grid !important; grid-template-columns:1fr repeat(3, 44px); gap:5px; margin:0 !important; width:100%;
+  background:none !important; border:0 !important; box-shadow:none !important; padding:0 !important;
+}
+html[data-halloween="on"][data-theme][data-sky] #view-chests #cxBetInput {
+  min-width:0; height:34px; padding:0 10px 0 32px !important; font-size:13px !important;
+  background:#0d0610 url("/images/gram.webp") 9px 50% / 16px 16px no-repeat !important;
+  color:#ffe8c2 !important; border:1px solid #250f05 !important; border-radius:6px !important;
+  box-shadow:inset 0 0 0 1px #a64f1c88, inset 0 2px 0 #000a !important;
+}
+html[data-halloween="on"][data-theme][data-sky] #view-chests #cxBetInput:focus { box-shadow:inset 0 0 0 1px #ffb347, 0 0 0 2px #ff8a2a55 !important; outline:none; }
+html[data-halloween="on"][data-theme][data-sky] #view-chests .cx-bet .cx-chip { height:34px; padding:0 !important; font-size:10px !important; }
+html[data-halloween="on"][data-theme][data-sky] #view-chests .cx-label {
+  margin:2px 0 0 !important; font-size:9px !important; color:#e9dfc8 !important; text-shadow:0 1px 0 #000 !important;
+}
+html[data-halloween="on"][data-theme][data-sky] #view-chests .cx-label::before { content:"\2620\FE0E  "; color:#efe4c8; }
+html[data-halloween="on"][data-theme][data-sky] #view-chests .cx-row {
+  display:grid !important; grid-template-columns:repeat(6, 1fr); gap:5px !important; margin:0 !important;
+}
+html[data-halloween="on"][data-theme][data-sky] #view-chests .cx-row .cx-chip { height:32px; padding:0 !important; font-size:10px !important; min-width:0; }
+html[data-halloween="on"][data-theme][data-sky] #view-chests #cxBtn { width:min(340px, 92vw) !important; margin:0 auto; }
